@@ -3772,6 +3772,90 @@
     }
   };
 
+  var hideEdges = function() {
+    this.cy.edges().hide();
+  };
+
+  var defineColumn = function(suffix) {
+    //
+    // TODO: delete all this. Use selections of nodes instead.
+    //
+    var source = CATMAID.skeletonListSources.getSelectedPushSource(this, suffix);
+    if (!this.columns) {
+      this.columns = [];
+    }
+    // Keep skeletons unique: a skeleton can only appear in one single column
+    var used = this.columns.reduce(function(skids, column) {
+      return column.reduce(function(skid) {
+        skids[skid] = true;
+        return skids;
+      }, skids);
+    }, {});
+    var skids = source.getSelectedSkeletons();
+    if (0 === skids.length) {
+      CATMAID.warn("No neurons selected!");
+      return;
+    }
+    skids = skids.filter(function(skid) {
+      return !used[skid];
+    });
+    if (0 === skids.length) {
+      CATMAID.warn("All neurons to add are already used by other columns.");
+      return;
+    }
+    if (skids.filter(function(skid) { return !this.hasSkeleton(skid); }, this) > 0) {
+      CATMAID.warn("If you want to make columns with neurons not yet in the graph, add them first.");
+      return;
+    }
+
+    updateColumnSelect();
+    renderColumns();
+  };
+
+  var getColumnSelect = function() {
+    return $("#gg_cg_columns" + this.widgetID)[0];
+  };
+
+  var updateColumnSelect = function() {
+    var column_select = getColumnSelect();
+    // Remove all columns
+    while (column_select.children.length > 0) {
+      column_select.removeChild(column_select.children[0]);
+    }
+
+    if (!this.columns) return;
+
+    // Append all columns
+    this.columns.forEach(function(column, i) {
+      var c = document.createElement("option");
+      option.text = i + 1;
+      option.value = i + 1;
+      column_select.appendChild(c);
+    });
+  };
+
+  var renderColumns = function() {
+    // TODO
+  };
+
+  var showFlowingEdges = function() {
+    // TODO
+    // TODO color edges like source nodes
+    // TODO change arrow to circle or bar depending on neurotransmitter
+  };
+
+
+  var clearColumn = function() {
+    if (!this.columns) return;
+    this.columns.splice(getColumnSelect().selectedIndex, 1);
+    updateColumnSelect();
+  };
+
+  var clearColumns = function() {
+    delete this.columns;
+    this.updateColumnSelect();
+  };
+
   // Export Graph Widget
   CATMAID.GroupGraph = GroupGraph;
 

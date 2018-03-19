@@ -1503,7 +1503,7 @@ var WindowMaker = new function()
     addWindowConfigButton(win, GG);
 
     var tabs = DOM.addTabGroup(bar, GG.widgetID, ['Main', 'Grow', 'Graph',
-        'Selection', 'Subgraphs', 'Align', 'Export']);
+        'Selection', 'Subgraphs', 'Align', 'Column Graph', 'Export']);
 
     DOM.appendToTab(tabs['Main'],
         [[document.createTextNode('From')],
@@ -1596,6 +1596,18 @@ var WindowMaker = new function()
          [document.createTextNode(' - Distribute: ')],
          [' X ', GG.distributeCoordinate.bind(GG, 'x')],
          [' Y ', GG.distributeCoordinate.bind(GG, 'y')]]);
+
+
+    DOM.appendToTab(tabs['Column Graph'],
+        [[CATMAID.skeletonListSources.createPushSelect(this, 'column-graph')],
+         ["Define column", GG.defineColumn.bind(GG, 'column-graph')],
+         [DOM.createSelect("gg_cg_columns" + GG.widgetID, [])],
+         ['Clear column', GG.clearColumn.bind(GG)],
+         ['Clear all columns', GG.clearColumns.bind(GG)],
+         ['Hide edges', GG.hideEdges.bind(GG)],
+         ['Show flowing edges', GG.showFlowingEdges.bind(GG)],
+         // TODO need way to choose arrow type for triangle, circle, bar, etc. for neurotransmitters
+        ]);
 
     var f = function(name) {
       var e = document.createElement('select');
