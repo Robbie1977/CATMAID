@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
-import colorsys
-import django.contrib.auth.views as django_auth_views
-import six
-
-from random import random
+from typing import Any, Dict
 
 from guardian.utils import get_anonymous_user
 
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.contrib.auth.decorators import user_passes_test
+from django.contrib.auth import views as auth_views
+from django.contrib.auth.mixins import UserPassesTestMixin
 from django.contrib.auth.models import User
+import django.contrib.auth.views as django_auth_views
+
+from catmaid.control.authentication import access_check
+from catmaid.control.common import get_request_bool
 
 
 def not_anonymous(user):
@@ -21,37 +22,48 @@ def not_anonymous(user):
     """
     return user.is_authenticated and user != get_anonymous_user()
 
-def access_check(user):
-    """ Returns true if users are logged in or if they have the general
-    can_browse permission assigned (i.e. not with respect to a certain object).
-    This is used to also allow the not logged in anonymous user to retrieve
-    data if it is granted the 'can_browse' permission.
-    """
-    if user.is_authenticated:
-        if user == get_anonymous_user():
-            return user.has_perm('catmaid.can_browse')
-        else:
-            return True
-    return False
-
 @user_passes_test(access_check)
-def user_list(request):
+def user_list(request:HttpRequest) -> JsonResponse:
+    """List registered users in this CATMAID instance. Must be logged in.
+    An administrator can export users including their encrpyted password. This
+    is meant to import users into other CATMAID instances.
+    ---
+    parameters:
+    - name: with_passwords
+      description: |
+        Export encrypted passwords. Requires admin access.
+      required: false
+      type: boolean,
+      default: false
+    """
+    with_passwords = get_request_bool(request.GET, 'with_passwords', False)
+    if with_passwords:
+        # Make sure user is an admin and part of the staff
+        if not request.user.is_staff and not request.user.is_superuser:
+            raise PermissionError("Superuser permissions required to export "
+                    "encrypted user passwords")
+
     result = []
     for u in User.objects.all().select_related('userprofile') \
             .order_by('last_name', 'first_name'):
         up = u.userprofile
-        result.append({
+        user_data = {
             "id": u.id,
             "login": u.username,
             "full_name": u.get_full_name(),
             "first_name": u.first_name,
             "last_name": u.last_name,
-            "color": (up.color.r, up.color.g, up.color.b) })
+            "color": (up.color.r, up.color.g, up.color.b)
+        }
+        if with_passwords:
+            # Append encypted user password
+            user_data['password'] = u.password
+        result.append(user_data)
 
     return JsonResponse(result, safe=False)
 
 @user_passes_test(access_check)
-def user_list_datatable(request):
+def user_list_datatable(request:HttpRequest) -> JsonResponse:
     display_start = int(request.POST.get('iDisplayStart', 0))
     display_length = int(request.POST.get('iDisplayLength', -1))
     if display_length < 0:
@@ -66,7 +78,7 @@ def user_list_datatable(request):
 
     # This field can be used to only return users that have used a certain
     # annotation.
-    annotations = [v for k,v in six.iteritems(request.POST)
+    annotations = [v for k,v in request.POST.items()
             if k.startswith('annotations[')]
 
     for annotation in annotations:
@@ -115,7 +127,7 @@ def user_list_datatable(request):
         'iTotalRecords': num_records,
         'iTotalDisplayRecords': num_records,
         'aaData': []
-    }
+    } # type: Dict[str, Any]
 
     for user in result:
         response['aaData'] += [[
@@ -127,38 +139,8 @@ def user_list_datatable(request):
 
     return JsonResponse(response)
 
-
-initial_colors = ((1, 0, 0, 1),
-                  (0, 1, 0, 1),
-                  (0, 0, 1, 1),
-                  (1, 0, 1, 1),
-                  (0, 1, 1, 1),
-                  (1, 1, 0, 1),
-                  (1, 1, 1, 1),
-                  (1, 0.5, 0, 1),
-                  (1, 0, 0.5, 1),
-                  (0.5, 1, 0, 1),
-                  (0, 1, 0.5, 1),
-                  (0.5, 0, 1, 1),
-                  (0, 0.5, 1, 1))
-
-
-def distinct_user_color():
-    """ Returns a color for a new user. If there are less users registered than
-    entries in the initial_colors list, the next free color is used. Otherwise,
-    a random color is generated.
-    """
-    nr_users = User.objects.exclude(id__exact=-1).count()
-
-    if nr_users < len(initial_colors):
-        distinct_color = initial_colors[nr_users]
-    else:
-        distinct_color = colorsys.hsv_to_rgb(random(), random(), 1.0) + (1,)
-
-    return distinct_color
-
 @user_passes_test(access_check)
-def update_user_profile(request):
+def update_user_profile(request:HttpRequest) -> JsonResponse:
     """ Allows users to update some of their user settings.
 
     If the request is done by the anonymous user, nothing is updated, but
@@ -169,18 +151,19 @@ def update_user_profile(request):
         return JsonResponse({'success': "The user profile of the " +
                 "anonymous user won't be updated"})
 
-    for var in []:
-        request_var = request.POST.get(var['name'], None)
-        if request_var:
-            request_var = var['parse'](request_var)
-            # Set new user profile values
-            setattr(request.user.userprofile, var['name'], request_var)
-
     # Save user profile
     request.user.userprofile.save()
 
     return JsonResponse({'success': 'Updated user profile'})
 
-@user_passes_test(not_anonymous)
-def change_password(request, **kwargs):
-    return django_auth_views.password_change(request, **kwargs)
+
+class NonAnonymousPasswordChangeView(UserPassesTestMixin, auth_views.PasswordChangeView):
+    """Only allow password changes for non-anonymous users.
+    """
+
+    def test_func(self):
+        return not_anonymous(self.request.user)
+
+    def handle_no_permission(self):
+        return auth_views.redirect_to_login(self.request.get_full_path(),
+                self.get_login_url(), self.get_redirect_field_name())

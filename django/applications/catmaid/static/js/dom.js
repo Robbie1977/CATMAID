@@ -54,12 +54,18 @@
   /**
    * Helper function to add a labeled control.
    */
-  DOM.createLabeledControl = function(name, control, helptext)
+  DOM.createLabeledControl = function(name, control, helptext, extraClass)
   {
-    var label = $('<label/>')
-      .append($('<span/>')
+    var description = $('<span/>')
         .addClass('description')
-        .append(name))
+        .append(name);
+
+    if (extraClass) {
+      description.addClass(extraClass);
+    }
+
+    var label = $('<label/>')
+      .append(description)
       .append(control);
 
     if (helptext) {
@@ -72,23 +78,44 @@
   /**
    * Helper function to create a checkbox with label.
    */
-  DOM.createCheckboxSetting = function(name, checked, helptext, handler)
+  DOM.createCheckboxSetting = function(name, checked, helptext, handler, subElement)
   {
     var cb = $('<input/>').attr('type', 'checkbox');
     if (checked) {
       cb.prop('checked', checked);
     }
+
+    if (subElement) {
+      var checkBoxName = $('<span />').append(cb).append(name);
+      var disableHandler = function(event) {
+        subElement.disabled = !this.checked;
+        if (CATMAID.tools.isFn(handler)) {
+          handler.call(this, event);
+        }
+      };
+      cb.change(disableHandler);
+      if (!checked) {
+        $(subElement).prop('disabled', true);
+      }
+      return CATMAID.DOM.createLabeledControl(checkBoxName, subElement, helptext);
+    }
+
     if (handler) {
       cb.change(handler);
     }
+
+    // If no sub-element should be added, display name in one wide row.
     var label = $('<div/>')
-      .addClass('setting checkbox-row')
-      .append($('<label/>').append(cb).append(name));
+        .addClass('setting checkbox-row')
+        .append($('<label/>').append(cb).append(name));
 
     if (helptext) {
       label.append(CATMAID.DOM.createHelpText(helptext));
     }
 
+    if (subElement) {
+
+    }
     return label;
   };
 
@@ -103,6 +130,22 @@
       input.change(handler);
     }
     return CATMAID.DOM.createLabeledControl(name, input, helptext);
+  };
+
+  /**
+   * Helper function to create a textarea input field with label.
+   */
+  DOM.createTextAreaSetting = function(name, val, helptext, handler, rows, cols) {
+    rows = CATMAID.tools.getDefined(rows, 4);
+    cols = CATMAID.tools.getDefined(cols, 50);
+    var input = $('<textarea/>')
+      .attr('rows', rows)
+      .attr('cols', cols)
+      .addClass("ui-corner-all").val(val);
+    if (handler) {
+      input.change(handler);
+    }
+    return CATMAID.DOM.createLabeledControl(name, input, helptext, 'top');
   };
 
   /**
@@ -131,7 +174,7 @@
           type: 'radio',
           name: name,
           id: val.id,
-          value: val.id
+          value: val.value !== undefined ? val.value : val.id
       }, helptext).prop('checked', val.checked).change(handler)));
     }, $('<div />'));
   };
@@ -157,7 +200,7 @@
   /**
    * Create a file open button that can be optionally initialized hidden.
    */
-  DOM.createFileButton = function(id, visible, onchangeFn) {
+  DOM.createFileButton = function(id, visible, onchangeFn, multiple, selectFolders) {
     var fb = document.createElement('input');
     fb.setAttribute('type', 'file');
     if (id) {
@@ -167,19 +210,62 @@
     if (!visible) {
       fb.style.display = 'none';
     }
-    fb.onchange = onchangeFn;
+    if (selectFolders) {
+      fb.setAttribute('webkitdirectory', 'webkitdirectory');
+      fb.setAttribute('multiple', 'multiple');
+    }
+    if (multiple) {
+      fb.setAttribute('multiple', 'multiple');
+    }
+    fb.onchange = function(event) {
+      try {
+        if (CATMAID.tools.isFn(onchangeFn)) {
+          onchangeFn.call(this, event);
+        }
+      } finally {
+        // Reset file button. Otherwise the same file can't be loaded again.
+        this.value = '';
+      }
+    };
     return fb;
   };
 
   DOM.appendFileButton = function(div, id, label, title, multiple, onchange) {
-    var fileButton = DOM.createFileButton(id, false, onchange);
-    if (multiple) {
-      fileButton.setAttribute('multiple', 'multiple');
-    }
-    div.appendChild(fileButton);
     var open = document.createElement('input');
+    if (onchange) {
+      // Wrap onchange function to include a referenc to the actual button in
+      // the argument list.
+      let originalOnChange = onchange;
+      onchange = function(event) {
+        originalOnChange.call(this, event, open);
+      };
+    }
+    var fileButton = DOM.createFileButton(id, false, onchange, true, false);
+    div.appendChild(fileButton);
     open.setAttribute("type", "button");
-    open.setAttribute("value", "Open");
+    open.setAttribute("value", label || "Open");
+    open.setAttribute("title", title);
+    open.onclick = function() { fileButton.click(); };
+    div.appendChild(open);
+
+    return open;
+  };
+
+  DOM.appendFolderButton = function(div, id, label, title, multiple, onchange) {
+    var open = document.createElement('input');
+    if (onchange) {
+      // Wrap onchange function to include a referenc to the actual button in
+      // the argument list.
+      let originalOnChange = onchange;
+      onchange = function(event) {
+        originalOnChange.call(this, event, open);
+      };
+    }
+    var fileButton = DOM.createFileButton(id, false, onchange, true, true);
+    div.appendChild(fileButton);
+    open.setAttribute("type", "button");
+    open.setAttribute("value", label || "Open");
+    open.setAttribute("title", title);
     open.onclick = function() { fileButton.click(); };
     div.appendChild(open);
 
@@ -221,7 +307,7 @@
     var toggle = document.createElement('i');
     toggle.setAttribute('class', iconClass);
     toggle.classList.add('windowButton');
-    toggle.onmousedown = handler;
+    toggle.onpointerdown = handler;
 
     if (title) {
       toggle.setAttribute('title', title);
@@ -239,20 +325,56 @@
    * @param {CMWWindow} win          Window to which the button with be added.
    * @param {string}    title        Title of the help window that will open.
    * @param {string}    helpTextHtml HTML source of the help text.
+   * @param {string}    externalLink (optional) Link with content to embed in
+   *                                 this help page.
    */
-  DOM.addHelpButton = function (win, title, helpTextHtml) {
+  DOM.addHelpButton = function (win, title, helpTextHtml, externalLink) {
     var helpTextFeedback =
         '<p class="ui-state-highlight ui-widget">' +
         'Is this documentation incomplete or incorrect? Help out by ' +
         '<a target="_blank" href="' +
         CATMAID.makeDocURL('contributing.html#in-client-documentation') +
         '">letting us know or contributing a fix.</a></p>';
+    let html = '';
+    if (helpTextHtml) {
+      html += helpTextHtml;
+    }
+    if (externalLink) {
+      html += `<iframe src="${externalLink}"></iframe>`;
+    } else {
+      html += helpTextFeedback;
+    }
     DOM.addCaptionButton(win,
         'fa fa-question',
         'Show help documentation for this widget',
         function () {
-          WindowMaker.create('html', {title: title,
-                                      html: helpTextHtml + helpTextFeedback});
+          let creationResult = WindowMaker.create('html', {
+            title: title,
+            html: html,
+          });
+
+          // Inject CSS reference to style external link
+          if (externalLink) {
+            let content = creationResult.window.getFrame();
+            content.classList.add('help-window');
+            let externalContent = content.querySelector('iframe');
+            if (externalContent) {
+              let cssLinks = ['css/screen.css', 'css/keyboard-shortcuts.css'].map(n => {
+                let cssLink = document.createElement('link');
+                cssLink.href = CATMAID.makeStaticURL(n);
+                cssLink.rel = 'stylesheet';
+                cssLink.type = 'text/css';
+                return cssLink;
+              });
+              externalContent.addEventListener('load', (e) => {
+                e.target.contentDocument.body.classList.add('catmaid');
+                cssLinks.forEach(cl => e.target.contentDocument.body.appendChild(cl));
+                let feedbackContainer = e.target.contentDocument.createElement('div');
+                feedbackContainer.innerHTML = helpTextFeedback;
+                e.target.contentDocument.body.appendChild(feedbackContainer);
+              });
+            }
+          }
         });
   };
 
@@ -275,7 +397,7 @@
     if (show || recreate) {
       // Create new panel
       panel = document.createElement('div');
-      panel.setAttribute('class', 'window-settings');
+      panel.classList.add('windowpanel', 'window-settings');
 
       var aliasInput = document.createElement('input');
       aliasInput.value = currentAlias;
@@ -294,6 +416,9 @@
 
       // Save settings button
       if (widget && stateSaving) {
+        var saveStateLabel = document.createElement('span');
+        saveStateLabel.appendChild(document.createTextNode('Widget state: '));
+        panel.appendChild(saveStateLabel);
         var saveStateButton = document.createElement('button');
         saveStateButton.appendChild(document.createTextNode('Save settings'));
         saveStateButton.onclick = function() {
@@ -379,7 +504,7 @@
       if (show || recreate) {
         // Create new panel
         panel = CATMAID.skeletonListSources.createSourceControls(source, options);
-        panel.setAttribute('class', 'sourcepanel');
+        panel.classList.add('windowpanel', 'sourcepanel');
         // Add as first element after caption and event catcher
         var eventCatcher = frame.querySelector('.eventCatcher');
         if (eventCatcher) {
@@ -411,7 +536,7 @@
     });
   };
 
-  var stringifyConerCases = function(key, value) {
+  var stringifyCornerCases = function(key, value) {
     if (value instanceof Set) {
       return JSON.stringify(Array.from(value.values()));
     }
@@ -424,6 +549,7 @@
    */
   DOM.addFilterControlsToggle = function(win, title, options) {
     title = title || 'Toggle filter controls';
+    var type = CATMAID.tools.getDefined(options.type, 'skeleton');
 
     // A toggle function that also allows to recreate the UI.
     var toggle = function(recreate) {
@@ -444,7 +570,7 @@
         }
         // Create new panel
         panel = document.createElement('div');
-        panel.setAttribute('class', 'dropdown-panel');
+        panel.classList.add('windowpanel', 'dropdown-panel');
 
         // Add tab panel, with first tab listing current rules and second allows
         // to add new rules.
@@ -465,7 +591,8 @@
         table.style.width = "100%";
         var header = table.createTHead();
         var hrow = header.insertRow(0);
-        var columns = ['On', 'Name', 'Merge mode', 'Options', 'Is skeleton', 'Has name', 'Action'];
+        var columns = ['On', 'Name', 'Merge mode', 'Options', 'Is skeleton',
+            'Invert', 'Has name', 'Action'];
         columns.forEach(function(c) {
           hrow.insertCell().appendChild(document.createTextNode(c));
         });
@@ -516,7 +643,7 @@
             {
               orderable: false,
               render: function(data, type, row, meta) {
-                return row.options ? JSON.stringify(row.options, stringifyConerCases) : "-";
+                return row.options ? JSON.stringify(row.options, stringifyCornerCases) : "-";
               }
             },
             {
@@ -529,7 +656,17 @@
                 } else {
                   return value;
                 }
-              }
+              },
+              visible: type === 'skeleton',
+            },
+            {
+              orderable: false,
+              render: function(data, type, row, meta) {
+                if (type === "display") {
+                  return row.invert ? 'Yes' : 'No';
+                }
+                return row.invert;
+              },
             },
             {
               orderable: false,
@@ -541,7 +678,8 @@
                 } else {
                   return value;
                 }
-              }
+              },
+              visible: type === 'skeleton',
             },
             {
               orderable: false,
@@ -600,13 +738,14 @@
           return false;
         });
 
-        // Get available filter strategeis
-        var nodeFilters = Object.keys(CATMAID.NodeFilterStrategy).reduce(function(o, p) {
-          o[CATMAID.NodeFilterStrategy[p].name] = p;
+        // Get available filter strategies
+        var Strategy = CATMAID.FilterStrategies.get(type);
+        var nodeFilters = Object.keys(Strategy).reduce(function(o, p) {
+          o[Strategy[p].name] = p;
           return o;
         }, {});
 
-        CATMAID.DOM.appendNewNodeFilterControls(nodeFilters, newFilterContent,
+        CATMAID.DOM.appendNewNodeFilterControls(type, nodeFilters, newFilterContent,
             function(rule, strategy) {
               filterRules.push(rule);
               CATMAID.tools.callIfFn(options.update);
@@ -615,7 +754,6 @@
               datatable.rows().invalidate();
               datatable.ajax.reload();
             });
-
 
         // Add as first element after caption and event catcher
         var eventCatcher = frame.querySelector('.eventCatcher');
@@ -639,8 +777,8 @@
         });
   };
 
-  DOM.appendNewNodeFilterControls = function(nodeFilters, target, onNewRule,
-        showMergeModeField, showSkeletonIdField, showNameField) {
+  DOM.appendNewNodeFilterControls = function(type, nodeFilters, target,
+      onNewRule, showMergeModeField, showSkeletonIdField, showNameField) {
     var $target = $(target);
     var nodeFilterSettingsContainer = document.createElement('span');
     var nodeFilterSettings = CATMAID.DOM.createLabeledControl("",
@@ -690,7 +828,15 @@
       }
 
       // Add filter specific settings
-      var createSettings = CATMAID.NodeFilterSettingFactories[strategy];
+      var SpecificFactories;
+      if (type === "node") {
+        SpecificFactories = CATMAID.NodeFilterSettingFactories;
+      } else if (type === "skeleton") {
+        SpecificFactories = CATMAID.SkeletonFilterSettingFactories;
+      } else {
+        throw new CATMAID.ValueError("Unknown filter type: " + type);
+      }
+      var createSettings = SpecificFactories[strategy];
       if (!createSettings) {
         throw new CATMAID.ValueError("Couldn't find settings method " +
             "for node filter \"" + strategy + "\"");
@@ -704,12 +850,25 @@
       }));
     $target.append(nodeFilterSettings);
 
+    let newRuleInvert = false;
+    let invertRuleLabel = document.createElement('label');
+    let invertRuleCb = invertRuleLabel.appendChild(document.createElement('input'));
+    invertRuleCb.setAttribute('type', 'checkbox');
+    invertRuleCb.addEventListener('change', function(e) {
+      newRuleInvert = this.checked;
+    });
+    invertRuleLabel.appendChild(document.createTextNode('Invert'));
+    $target.append(invertRuleLabel);
+
     var addRuleButton = document.createElement('button');
     addRuleButton.appendChild(document.createTextNode("Add new filter rule"));
     addRuleButton.onclick = function() {
-      var strategy = CATMAID.NodeFilterStrategy[newRuleStrategy];
-      var rule = new CATMAID.SkeletonFilterRule( strategy,
-          newRuleOptions, newRuleMergeMode, newRuleSkeletonID, newRuleSkeletonName);
+      var TypeSpecificRule = CATMAID.FilterRules.get(type);
+      var typeSpecificFactories = CATMAID.FilterStrategies.get(type);
+      var strategy = typeSpecificFactories[newRuleStrategy];
+      var rule = new TypeSpecificRule(strategy, newRuleOptions,
+          newRuleMergeMode, newRuleSkeletonID, newRuleSkeletonName,
+          newRuleInvert);
 
       updateNodeFilterSettings(newRuleStrategy);
 
@@ -725,7 +884,7 @@
     return target;
   };
 
-  DOM.createCheckboxSelectPanel = function(options, selectedKeys, showFilter) {
+  DOM.createCheckboxSelectPanel = function(options, selectedKeys, showFilter, rowFn) {
     var selectedSet = new Set(selectedKeys ? selectedKeys : undefined);
     var container = document.createElement('div');
     var checkboxes = document.createElement('ul');
@@ -736,9 +895,11 @@
       var checkbox = document.createElement('input');
       checkbox.setAttribute('type', 'checkbox');
       checkbox.setAttribute('value', o.value);
+      checkbox.setAttribute('data-role', 'option');
       entry.appendChild(checkbox);
       entry.appendChild(document.createTextNode(o.title));
-      if (selectedSet.has(o.value)) {
+      var selected = selectedSet.has(o.value);
+      if (selected) {
         checkbox.checked = true;
       }
       var listElement = document.createElement('li');
@@ -754,6 +915,10 @@
         }
         labelElements.push(entry);
       }
+
+      if (CATMAID.tools.isFn(rowFn)) {
+        rowFn(listElement, o.value, selected);
+      }
     }
     var entryKeys = Array.from(entryIndex.keys());
 
@@ -762,6 +927,123 @@
       e.cancelBubble = true;
       if (e.stopPropagation) e.stopPropagation();
     };
+
+    if (showFilter) {
+      var selectedFilterContainer = document.createElement('label');
+      var selectedFilter = document.createElement('input');
+      selectedFilter.setAttribute('type', 'checkbox');
+      selectedFilter.onclick = function(e) {
+        e.cancelBubble = true;
+        if (e.stopPropagation) e.stopPropagation();
+      };
+      selectedFilter.onchange = function(e) {
+        filterInput.onkeyup(e);
+      };
+      selectedFilterContainer.appendChild(selectedFilter);
+      selectedFilterContainer.appendChild(document.createTextNode('Selected Only'));
+      var filterInput = document.createElement('input');
+      filterInput.setAttribute('placeholder', 'Filter');
+      filterInput.setAttribute('type', 'text');
+      filterInput.onclick = function(e) {
+        e.cancelBubble = true;
+        if (e.stopPropagation) e.stopPropagation();
+      };
+      filterInput.onkeyup = function(e) {
+        var filterTerm = this.value;
+        var keys = entryKeys;
+        var regex = new RegExp(CATMAID.tools.escapeRegEx(filterTerm), 'i');
+        for (var i=0, max=keys.length; i<max; ++i) {
+          var key = keys[i];
+          var elements = entryIndex.get(key);
+          var checkbox = elements.reduce(function (cbox, el) {
+            return cbox || $(el).find('input[type="checkbox"]').get(0);
+          }, undefined);
+          var match = (!selectedFilter.checked || checkbox.checked) && key.match(regex);
+          for (var j=0, jmax=elements.length; j<jmax; ++j) {
+            var element = elements[j];
+            element.style.display = match ? 'block' : 'none';
+          }
+        }
+        e.cancelBubble = true;
+        if (e.stopPropagation) e.stopPropagation();
+      };
+      container.appendChild(selectedFilterContainer);
+      container.appendChild(filterInput);
+    }
+    container.appendChild(checkboxes);
+
+    return container;
+  };
+
+
+  /**
+   * Create a new select element that when clicked (or optionally hovered) shows
+   * a custom list in a DIV container below it. This custom list provides
+   * checkbox elements for each entry
+   *
+   * Main idea from: http://stackoverflow.com/questions/17714705
+   *
+   * @param title        {String}   A title showing as the first element of the select
+   * @param options      {Object[]} A list of {title: <>, value: <>} objects.
+   * @param selectedKeys {String[]} (Optional) list of keys that should be
+   *                                selected initially
+   * @param showFilter   {Bool}     Whether to show a filter input field.
+   * @param rowFn        {Function} (optional) A function that is called for each entry.
+   *
+   * @returns a wrapper around the select element
+   */
+  DOM.createCheckboxSelect = function(title, options, selectedKeys, showFilter, rowFn) {
+    var container = DOM.createCheckboxSelectPanel(options, selectedKeys, showFilter, rowFn);
+    return CATMAID.DOM.createCustomContentSelect(title, container);
+  };
+
+  /**
+   * Create a new select element that when clicked (or optionally hovered) shows
+   * a custom list in a DIV container below it. This custom list provides a
+   * radio element for each entry.
+   *
+   * @param title        {String}   A title showing as the first element of the select
+   * @param options      {Object[]} A list of {title: <>, value: <>} objects.
+   * @param selectedKey  {String}   (Optional) the key that should be selected initially
+   * @param showFilter   {Bool}     Whether to show a filter input field.
+   *
+   * @returns a wrapper around the select element
+   */
+  DOM.createRadioSelectPanel = function(title, options, selectedKey, showFilter) {
+    var container = document.createElement('div');
+    var radiobuttons = document.createElement('ul');
+    var entryIndex = new Map();
+    for (var i=0; i<options.length; ++i) {
+      var o = options[i];
+      var entry = document.createElement('label');
+      var radiobutton = document.createElement('input');
+      radiobutton.setAttribute('type', 'radio');
+      radiobutton.setAttribute('value', o.value);
+      radiobutton.setAttribute('name', title);
+      entry.appendChild(radiobutton);
+      entry.appendChild(document.createTextNode(o.title));
+      if (selectedKey == o.value) {
+        radiobutton.checked = true;
+      }
+      radiobuttons.appendChild(entry);
+
+      // Save in index
+      if (showFilter) {
+        var labelElements = entryIndex.get(o.title);
+        if (!labelElements) {
+          labelElements = [];
+          entryIndex.set(o.title, labelElements);
+        }
+        labelElements.push(entry);
+      }
+    }
+    radiobuttons.onclick = function(e) {
+      // Cancel bubbling
+      e.cancelBubble = true;
+      if (e.stopPropagation) e.stopPropagation();
+    };
+
+    var entryKeys = Array.from(entryIndex.keys());
 
     if (showFilter) {
       var filterInput = document.createElement('input');
@@ -789,31 +1071,11 @@
       };
       container.appendChild(filterInput);
     }
-    container.appendChild(checkboxes);
+    container.appendChild(radiobuttons);
 
     return container;
   };
 
-
-  /**
-   * Create a new select element that when clicked (or optionally hovered) shows
-   * a custom list in a DIV container below it. This custom list provides
-   * checkbox elements for each entry
-   *
-   * Main idea from: http://stackoverflow.com/questions/17714705
-   *
-   * @param title        {String}   A title showing as the first element of the select
-   * @param options      {Object[]} A list of {title: <>, value: <>} objects.
-   * @param selectedKeys {String[]} (Optional) list of keys that should be
-   *                                selected initially
-   * @param showFilter   {Bool}     Whether to show a filter input field.
-   *
-   * @returns a wrapper around the select element
-   */
-  DOM.createCheckboxSelect = function(title, options, selectedKeys, showFilter) {
-    var container = DOM.createCheckboxSelectPanel(options, selectedKeys, showFilter);
-    return CATMAID.DOM.createCustomContentSelect(title, container);
-  };
 
   /**
    * Create a new select element that when clicked (or optionally hovered) shows
@@ -823,32 +1085,20 @@
    * @param title        {String}   A title showing as the first element of the select
    * @param options      {Object[]} A list of {title: <>, value: <>} objects.
    * @param selectedKey  {String}   (Optional) the key that should be selected initially
+   * @param showFilter   {Bool}     Whether to show a filter input field.
+   * @param titleMode    {String}   (Optional) Whether to only show the passed in
+   *                                title ('title', default), the selected item only
+   *                                ('selected') or both ('title-selected').
+   * @param emptyValue   {String}   (Optional) A value shown if no item is selected,
+   *                                default: "(none)".
    *
    * @returns a wrapper around the select element
    */
-  DOM.createRadioSelect = function(title, options, selectedKey) {
-    var radiobuttons = document.createElement('ul');
-    for (var i=0; i<options.length; ++i) {
-      var o = options[i];
-      var entry = document.createElement('label');
-      var radiobutton = document.createElement('input');
-      radiobutton.setAttribute('type', 'radio');
-      radiobutton.setAttribute('value', o.value);
-      radiobutton.setAttribute('name', title);
-      entry.appendChild(radiobutton);
-      entry.appendChild(document.createTextNode(o.title));
-      if (selectedKey == o.value) {
-        radiobutton.checked = true;
-      }
-      radiobuttons.appendChild(entry);
-    }
-    radiobuttons.onclick = function(e) {
-      // Cancel bubbling
-      e.cancelBubble = true;
-      if (e.stopPropagation) e.stopPropagation();
-    };
-
-    return CATMAID.DOM.createCustomContentSelect(title, radiobuttons);
+  DOM.createRadioSelect = function(title, options, selectedKey, showFilter,
+      titleMode, emptyValue) {
+    var container = DOM.createRadioSelectPanel(title, options, selectedKey, showFilter);
+    return CATMAID.DOM.createCustomContentSelect(title, container, selectedKey,
+        titleMode, emptyValue);
   };
 
   /**
@@ -857,12 +1107,18 @@
    *
    * Main idea from: http://stackoverflow.com/questions/17714705
    *
-   * @param title {String}   A title showing as the first element of the select
-   * @param content {Object} Content to be displayed when select is clicked
+   * @param {String} title      A title showing as the first element of the select
+   * @param {Object} content    Content to be displayed when select is clicked
+   * @param {String} titleMode  (Optional) Whether to only show the passed in
+   *                            title ('title', default), the selected item only
+   *                            ('selected') or both ('title-selected').
+   * @param {String} emptyValue (Optional) A value shown if no item is selected,
+   *                            default: "(none)".
    *
    * @returns a wrapper around the select element
    */
-  DOM.createCustomContentSelect = function(title, content) {
+  DOM.createCustomContentSelect = function(title, content, selectedKey,
+      titleMode = 'title', emptyValue = '(none)') {
     // Expandable container
     var container = document.createElement('span');
     container.setAttribute('class', 'customselect');
@@ -872,6 +1128,8 @@
 
     var toggleSelect = document.createElement('select');
     toggleSelect.options.add(new Option(title));
+    CATMAID.DOM._updateSelectTitle(toggleSelect, content, title, selectedKey,
+        titleMode, emptyValue);
     selectBox.appendChild(toggleSelect);
 
     // Hide the selects drop down menu, which is needed for creating our own
@@ -889,17 +1147,35 @@
     customContent.appendChild(content);
     container.appendChild(customContent);
 
+    var onpointerdown = function() {
+      toggleExpansion();
+    };
+
     // The function responsible for hiding and showing all controls has a
     // private state variable and an IIFE is used to encapsulate it (to reduce
     // closure size).
     var toggleExpansion = (function(context) {
       var expanded = false;
-      return function(e) {
+      return function() {
         var customContent = context.querySelector('div.customselect-content');
         if (expanded) {
           customContent.style.display = 'none';
+          CATMAID.ui.releaseEvents();
+          CATMAID.ui.removeEvent("onpointerdown", onpointerdown);
         } else {
           customContent.style.display = 'block';
+          $(customContent).scrollintoview();
+
+          // Enable general UI click handler to close drop down if the pointer
+          // was clicked outside of the control.
+          CATMAID.ui.catchEvents();
+          CATMAID.ui.registerEvent("onpointerdown", onpointerdown);
+        }
+        // TODO: find a better counter-action to scrollIntoView below. But
+        // currently this is needed for CATMAID windows after the custom
+        // select has been scrolled into view.
+        if (CATMAID.rootWindow) {
+          CATMAID.rootWindow.redraw();
         }
         expanded = !expanded;
       };
@@ -908,7 +1184,7 @@
     // Expand whe the container is clicked
     container.onclick = toggleExpansion;
     toggleSelect.onclick = function(e) {
-      toggleExpansion(e);
+      toggleExpansion();
       return false; // Don't bubble up
     };
 
@@ -917,7 +1193,34 @@
     var wrapper = document.createElement('span');
     wrapper.appendChild(container);
 
+    // Cancel change events of the text input during capturing phase.
+    wrapper.addEventListener('change', event => {
+      if (event.target.type === 'text') event.stopPropagation();
+    }, true);
+
+    // Update the title on a non-text input change
+    wrapper.addEventListener('change', event => {
+      if (event.target.type === 'text') return;
+      CATMAID.DOM._updateSelectTitle(toggleSelect, content, title,
+          event.target.value, titleMode, emptyValue);
+    });
+
     return wrapper;
+  };
+
+  DOM._updateSelectTitle = function(select, content, title, value, titleMode,
+      emptyValue = '(none)') {
+    let text = (value === undefined || value === null || value.length === 0) ? emptyValue :
+        ($(content).find(`input[value='${value}']`).closest('label').text());
+    let newTitle;
+    if (titleMode === 'title') {
+      newTitle = title;
+    } else if (titleMode === 'selected') {
+      newTitle = text;
+    } else if (titleMode === 'title-selected') {
+      newTitle = `${title}: ${text}`;
+    }
+    select.options[0].text = newTitle;
   };
 
   /**
@@ -937,7 +1240,7 @@
    * been loaded, i.e. the passed in promise has been resolved. The promise is
    * expected to return the actual element to be displayed.
    */
-  DOM.createAsyncPlaceholder= function(promise) {
+  DOM.createAsyncPlaceholder = function(promise) {
     var placeholder = CATMAID.DOM.createPlaceholder();
     if (!promise || !CATMAID.tools.isFn(promise.then)) {
       throw new CATMAID.ValueError('Async musst be either a callback or promise');
@@ -955,6 +1258,15 @@
     return placeholder;
   };
 
+  DOM.createLabeledAsyncPlaceholder = function(label, promise, helptext) {
+    var placeholder = CATMAID.DOM.createAsyncPlaceholder(promise);
+    var wrapper = document.createElement('span');
+    wrapper.appendChild(placeholder);
+    var labeledWrapper = CATMAID.DOM.createLabeledControl(
+        label, wrapper, helptext);
+    return labeledWrapper.get(0);
+  };
+
 	DOM.createCheckbox = function(label, value, onclickFn, id) {
 		var cb = document.createElement('input');
 		cb.setAttribute('type', 'checkbox');
@@ -964,21 +1276,53 @@
 		return [cb, document.createTextNode(label)];
 	};
 
+	DOM.createRadioButton = function(label, name, value, checked, onclickFn, id) {
+		var cb = document.createElement('input');
+		cb.setAttribute('type', 'radio');
+		cb.setAttribute('name', name);
+		if (id) cb.setAttribute('id', id);
+		cb.checked = !!checked;
+		cb.onchange = onclickFn;
+		return [cb, document.createTextNode(label)];
+	};
+
   /**
    * Create a new numeric field based on the passed in configuration.
    */
-  DOM.createNumericField = function(id, label, title, value, postlabel, onchangeFn, length, placeholder, disabled) {
-    return DOM.createTextField(id, label, title, value, postlabel, onchangeFn, length, placeholder, disabled);
+  DOM.createNumericField = function(id, label, title, value, postlabel,
+      onchangeFn, length, placeholder, disabled, step, min, max) {
+    var attrs = {};
+    if (step !== undefined) {
+      attrs['step'] = step;
+    }
+    if (min !== undefined) {
+      attrs['min'] = min;
+    }
+    if (max !== undefined) {
+      attrs['max'] = max;
+    }
+    return DOM.createInput('number', id, label, title, value,
+        postlabel, onchangeFn, length, placeholder, disabled, undefined, attrs);
   };
 
   /**
-   * Create a new text field based on the passed in configuration.
+   * Create a new input field based on the passed in configuration.
    */
-  DOM.createTextField = function(id, label, title, value, postlabel, onchangeFn, length, placeholder, disabled) {
+  DOM.createInput = function(type, id, label, title, value, postlabel,
+      onchangeFn, length, placeholder, disabled, onEnterFn, attrs) {
     var nf = document.createElement('input');
     if (id) nf.setAttribute('id', id);
-    nf.setAttribute('type', 'text');
-    nf.setAttribute('value', value);
+    nf.setAttribute('type', type);
+
+    if (value !== undefined) {
+      nf.setAttribute('value', value);
+    }
+
+    if (attrs) {
+      for (var a in attrs) {
+        nf.setAttribute(a, attrs[a]);
+      }
+    }
 
     if (placeholder) {
       nf.setAttribute('placeholder', placeholder);
@@ -988,8 +1332,15 @@
       nf.disabled = !!disabled;
     }
 
-    if (length) nf.setAttribute('size', length);
+    if (length) {
+      nf.style.width = length + 'em';
+    }
     if (onchangeFn) nf.onchange = onchangeFn;
+    if (onEnterFn) {
+      nf.addEventListener('keyup', function(e) {
+        if (e.keyCode === 13) onEnterFn.call(this, e);
+      });
+    }
     if (label || postlabel) {
       var labelEl = document.createElement('label');
       labelEl.setAttribute('title', title);
@@ -1000,6 +1351,15 @@
     } else {
       return nf;
     }
+  };
+
+  /**
+   * Create a new text field based on the passed in configuration.
+   */
+  DOM.createTextField = function(id, label, title, value, postlabel, onchangeFn,
+      length, placeholder, disabled, onEnterFn) {
+    return DOM.createInput("text", id, label, title, value, postlabel,
+        onchangeFn, length, placeholder, disabled, onEnterFn);
   };
 
   /**
@@ -1031,10 +1391,11 @@
     }
   };
 
-  DOM.createSelect = function(id, items, selectedValue) {
-    var select = document.createElement('select');
-    if (id) {
-      select.setAttribute("id", id);
+  DOM.appendOptionsToSelect = function(select, items, selectedValue, clear) {
+    if (clear) {
+      while (select.lastChild) {
+        select.removeChild(select.lastChild);
+      }
     }
     items.forEach(function(item, i) {
       var option = document.createElement("option");
@@ -1049,13 +1410,41 @@
       }
       option.text = text;
       option.value = value;
-      if (option.value === selectedValue) {
+      if (option.value == selectedValue) {
         option.defaultSelected = true;
         option.selected = true;
       }
       select.appendChild(option);
     });
+  };
+
+  DOM.createSelect = function(id, items, selectedValue, onChange) {
+    var select = document.createElement('select');
+    if (id) {
+      select.setAttribute("id", id);
+    }
+    DOM.appendOptionsToSelect(select, items, selectedValue);
+    if (CATMAID.tools.isFn(onChange)) {
+      select.addEventListener("change", onChange);
+    }
     return select;
+  };
+
+  DOM.createSelectElement = function(label, entries, title, value, onChangeFn, id) {
+    let select = CATMAID.DOM.createSelect(id, entries, value);
+    var labelElement = document.createElement('label');
+    if (title) {
+      select.title = title;
+      labelElement.setAttribute('title', title);
+    }
+    if (onChangeFn) {
+      select.onchange= onChangeFn;
+    }
+
+    labelElement.appendChild(document.createTextNode(label || ''));
+    labelElement.appendChild(select);
+
+    return labelElement;
   };
 
   /**
@@ -1066,7 +1455,7 @@
     var ul = document.createElement('ul');
     container.appendChild(ul);
     return titles.reduce(function(o, name) {
-      var id = name.replace(/ /, '') + widgetId;
+      var id = name.replace(/ /g, '') + widgetId;
       ul.appendChild($('<li><a href="#' + id + '">' + name + '</a></li>')[0]);
       var div = document.createElement('div');
       div.setAttribute('id', id);
@@ -1074,6 +1463,40 @@
       o[name] = div;
       return o;
     }, {});
+  };
+
+  DOM.appendElement = function(target, e) {
+    switch (e.type) {
+      case 'child':
+        return target.appendChild(e.element);
+      case 'button':
+        return CATMAID.DOM.appendButton(target, e.label, e.title, e.onclick, e.attr, e.disabled, e.id);
+      case 'color-button':
+        return CATMAID.DOM.appendColorButton(target, e.label, e.title, e.attr, e.onchange, e.color);
+      case 'checkbox':
+        return CATMAID.DOM.appendCheckbox(target, e.label, e.title, e.value, e.onclick, e.left, e.id);
+      case 'radio':
+        return CATMAID.DOM.appendRadioButton(target, e.label, e.title, e.name,
+            e.value, e.checked, e.onclick, e.left, e.id);
+      case 'numeric':
+        return CATMAID.DOM.appendNumericField(target, e.label, e.title,
+            e.value, e.postlabel, e.onchange, e.length, e.placeholder,
+            e.disabled, e.step, e.min, e.max, e.id);
+      case 'text':
+        return CATMAID.DOM.appendTextField(target, e.id, e.label, e.title, e.value,
+            e.postlabel, e.onchange, e.length, e.placeholder, e.disabled, e.onenter);
+      case 'date':
+        return CATMAID.DOM.appendDateField(target, e.label, e.title, e.value,
+            e.postlabel, e.onchange, e.length, e.placeholder, e.time);
+      case 'select':
+        return CATMAID.DOM.appendSelect(target, e.relativeId, e.label, e.entries, e.title, e.value, e.onchange, e.id);
+      case 'file':
+        return CATMAID.DOM.appendFileButton(target, e.id, e.label, e.title, e.multiple, e.onclick);
+      case 'folder':
+        return CATMAID.DOM.appendFolderButton(target, e.id, e.label, e.title, e.multiple, e.onclick);
+      default:
+        return undefined;
+    }
   };
 
   /**
@@ -1102,30 +1525,7 @@
           default: return undefined;
         }
       } else {
-        switch (e.type) {
-          case 'child':
-            return tab.appendChild(e.element);
-          case 'button':
-            return CATMAID.DOM.appendButton(tab, e.label, e.title, e.onclick, e.attr);
-          case 'color-button':
-            return CATMAID.DOM.appendColorButton(tab, e.label, e.title, e.attr, e.onchange, e.color);
-          case 'checkbox':
-            return CATMAID.DOM.appendCheckbox(tab, e.label, e.title, e.value, e.onclick, e.left, e.id);
-          case 'numeric':
-            return CATMAID.DOM.appendNumericField(tab, e.label, e.title, e.value, e.postlabel, e.onchange, e.length, e.placeholder);
-          case 'text':
-            return CATMAID.DOM.appendTextField(tab, e.id, e.label, e.title, e.value,
-                e.postlabel, e.onchange, e.length, e.placeholder, e.disabled);
-          case 'date':
-            return CATMAID.DOM.appendDateField(tab, e.label, e.title, e.value,
-                e.postlabel, e.onchange, e.length, e.placeholder, e.time);
-          case 'select':
-            return CATMAID.DOM.appendSelect(tab, e.id, e.label, e.entries, e.title, e.value, e.onchange);
-          case 'file':
-            return CATMAID.DOM.appendFileButton(tab, e.id, e.label, e.title, e.multiple, e.onclick);
-          default:
-            return undefined;
-        }
+        return CATMAID.DOM.appendElement(tab, e);
       }
     });
   };
@@ -1133,13 +1533,19 @@
   /**
    * Append a new button to another element.
    */
-  DOM.appendButton = function(div, label, title, onclickFn, attr) {
+  DOM.appendButton = function(div, label, title, onclickFn, attr, disabled, id) {
     var b = document.createElement('input');
+    if (id) {
+      b.setAttribute('id', id);
+    }
     if (attr) Object.keys(attr).forEach(function(key) { b.setAttribute(key, attr[key]); });
     b.setAttribute('type', 'button');
     b.setAttribute('value', label);
     if (title) {
       b.setAttribute('title', title);
+    }
+    if (disabled) {
+      b.disabled = true;
     }
     b.onclick = onclickFn;
     div.appendChild(b);
@@ -1176,8 +1582,26 @@
    */
   DOM.appendCheckbox = function(div, label, title, value, onclickFn, left, id) {
     var labelEl = document.createElement('label');
-    labelEl.setAttribute('title', title);
+    if (title) {
+      labelEl.setAttribute('title', title);
+    }
     var elems = DOM.createCheckbox(label, value, onclickFn, id);
+    if (left) elems.reverse();
+    elems.forEach(function(elem) { labelEl.appendChild(elem); });
+    div.appendChild(labelEl);
+    return labelEl;
+  };
+
+  /**
+   * Append a new radio button to another element.
+   */
+  DOM.appendRadioButton = function(div, label, title, name, value, checked,
+      onclickFn, left, id) {
+    var labelEl = document.createElement('label');
+    if (title) {
+      labelEl.setAttribute('title', title);
+    }
+    var elems = DOM.createRadioButton(label, name, value, checked, onclickFn, id);
     if (left) elems.reverse();
     elems.forEach(function(elem) { labelEl.appendChild(elem); });
     div.appendChild(labelEl);
@@ -1187,8 +1611,10 @@
   /**
    * Append a new numeric input field to another element.
    */
-  DOM.appendNumericField = function(div, label, title, value, postlabel, onchangeFn, length, placeholder) {
-    var field = DOM.createNumericField(undefined, label, title, value, postlabel, onchangeFn, length, placeholder);
+  DOM.appendNumericField = function(div, label, title, value, postlabel,
+      onchangeFn, length, placeholder, disabled, step, min, max, id) {
+    var field = DOM.createNumericField(id, label, title, value, postlabel,
+        onchangeFn, length, placeholder, disabled, step, min, max);
     div.appendChild(field);
     return field;
   };
@@ -1196,8 +1622,10 @@
   /**
    * Append a new text input field to another element.
    */
-  DOM.appendTextField = function(div, id, label, title, value, postlabel, onchangeFn, length, placeholder, disabled) {
-    var field = DOM.createTextField(id, label, title, value, postlabel, onchangeFn, length, placeholder, disabled);
+  DOM.appendTextField = function(div, id, label, title, value, postlabel,
+      onchangeFn, length, placeholder, disabled, onEnterFn) {
+    var field = DOM.createInput('text', id, label, title, value, postlabel,
+        onchangeFn, length, placeholder, disabled, onEnterFn);
     div.appendChild(field);
     return field;
   };
@@ -1216,25 +1644,234 @@
   /**
    * Append a new select element to another element.
    */
-  DOM.appendSelect = function(div, id, label, entries, title, value, onChangeFn) {
-    id = id ? (div.id + '_' + id) : undefined;
-    var select = CATMAID.DOM.createSelect(id, entries, value);
-    div.appendChild(select);
-    if (title) {
-      select.title = title;
-    }
-    if (onChangeFn) {
-      select.onchange= onChangeFn;
-    }
-    if (label) {
-      var labelElement = document.createElement('label');
-      labelElement.setAttribute('title', title);
-      labelElement.appendChild(document.createTextNode(label));
-      labelElement.appendChild(select);
-      div.appendChild(labelElement);
-    }
+  DOM.appendSelect = function(div, relId, label, entries, title, value,
+      onChangeFn, id) {
+    id = id ? id : (relId ? (div.id + '_' + relId) : undefined);
+    let selectWrapper = CATMAID.DOM.createSelectElement(label, entries, title, value,
+        onChangeFn, id);
+    div.append(selectWrapper);
+    let select = selectWrapper.querySelector('select');
     return select;
   };
+
+  DOM.appendLabeledElement = function(target, title, element) {
+    var label = document.createElement('label');
+    label.setAttribute('title', title);
+    label.appendChild(document.createTextNode(label));
+    label.appendChild(element);
+    return label;
+  };
+
+  DOM.createSkeletonNodeMatcherSetting = function(options) {
+    var settings = options.settings;
+    if (!settings) {
+      throw new CATMAID.ValueError('Need settings reference');
+    }
+    var id = options.id;
+    if (!id) {
+      throw new CATMAID.ValueError('Need ID');
+    }
+    var update = options.updateSettings;
+    if (!CATMAID.tools.isFn(update)) {
+      throw new CATMAID.ValueError('Need update function');
+    }
+    var radioControl = CATMAID.DOM.createRadioSetting(
+        id,
+        [{
+          id: id + '-universal',
+          desc: 'Universal match',
+          checked: settings.hasOwnProperty('universal')
+        },{
+          id: id + '-meta-annotation',
+          desc: 'Match meta-annotation',
+          checked: settings.hasOwnProperty('metaAnnotationName')
+        },{
+          id: id + '-creator',
+          desc: 'Match by creator',
+          checked: settings.hasOwnProperty('creatorID')
+        }],
+        null,
+        function () {
+          var radioValue = $('input[type="radio"][name="' + id + '"]:checked').val();
+          var newSetting = {};
+          switch (radioValue.split('-').slice(-1)[0]) {
+            case 'universal':
+              newSetting.universal = $('#' + id + '-value-0').val();
+              break;
+            case 'annotation':
+              newSetting.metaAnnotationName = $('#' + id + '-value-1').val();
+              break;
+            case 'creator':
+              var creatorValue = $('#' + id + '-value-2').val();
+              newSetting.creatorID = parseInt(creatorValue, 10);
+              break;
+          }
+
+          update(newSetting);
+        }).addClass('setting');
+
+    // Add additional controls
+    radioControl.children().each(function (i, radio) {
+      var select;
+      var checkRadioOnChange = function (name) {
+        return function () {
+          $('#' + id + '-' + name)
+              .prop('checked', true)
+              .trigger('change');
+        };
+      };
+      switch (i) {
+        case 0:
+          var selected = settings.hasOwnProperty('universal') ?
+              settings.universal : 'none';
+          select = CATMAID.DOM.createSelectSetting(
+                '',
+                {'All skeletons': 'all', 'No skeletons': 'none'},
+                null,
+                checkRadioOnChange('universal'),
+                selected);
+          select = select.children('label').children('select');
+          break;
+        case 1:
+          var selected = settings.hasOwnProperty('metaAnnotationName') ?
+              settings.metaAnnotationName : null;
+          select = $('<input/>').attr('type', 'text')
+              .addClass("ui-corner-all").val(selected);
+          select.change(checkRadioOnChange('meta-annotation'));
+          select.autocomplete({
+            source: CATMAID.annotations.getAllNames(),
+            change: checkRadioOnChange('meta-annotation')
+          });
+          break;
+        case 2:
+          var selected = settings.hasOwnProperty('creatorID') ?
+              settings.creatorID : null;
+          var users = CATMAID.User.all();
+          users = Object.keys(users)
+              .map(function (userID) { return users[userID]; })
+              .sort(CATMAID.User.displayNameCompare)
+              .reduce(function (o, user) {
+                o[user.getDisplayName()] = user.id;
+                return o;
+              }, {});
+          select = CATMAID.DOM.createSelectSetting(
+                '',
+                users,
+                null,
+                checkRadioOnChange('creator'),
+                selected);
+          select = select.children('label').children('select');
+          break;
+      }
+
+      select.attr('id', id + '-value-' + i);
+      $(radio).append(select);
+    });
+
+    if (options.help) {
+    radioControl.prepend($('<p/>')
+          .addClass('help')
+          .append(options.help));
+    }
+
+    if (options.label) {
+      radioControl.prepend($('<h4/>').append(label));
+    }
+
+    var radioWrapper = $('<div />').addClass('setting');
+    radioWrapper.append(radioControl);
+    return radioWrapper;
+  };
+
+  DOM.initLinkTypeList = function(target) {
+    return CATMAID.Connectors.linkTypes(project.id)
+      .then(function(json) {
+        var seenLinkTypes = new Set();
+        let linkTypes;
+        if (target.byPartnerReference) {
+          linkTypes = json.sort(function(a, b) {
+            return CATMAID.tools.compareStrings(a.partner_reference, b.partner_reference);
+          }).map(function(lt) {
+            return {
+              title: lt.partner_reference,
+              value: lt.partner_reference
+            };
+          });
+        } else {
+          linkTypes = json.sort(function(a, b) {
+            return CATMAID.tools.compareStrings(a.type, b.type);
+          }).filter(function(lt, i, a) {
+            // Remove duplicates
+            let isNew = !seenLinkTypes.has(lt.type);
+            seenLinkTypes.add(lt.type);
+            return isNew;
+          }).map(function(lt) {
+            return {
+              title: lt.type,
+              value: lt.type_id
+            };
+          });
+        }
+
+        var selectedLinkTypes = target.getSelectedLinkTypes();
+        // Create actual element based on the returned data
+        var node = CATMAID.DOM.createCheckboxSelect('Link types', linkTypes,
+            selectedLinkTypes, true);
+
+        // Add color buttons for already display options
+        if (target.color) {
+          $('input:checked', node).each(function(e) {
+            var li = this.closest('li');
+            if (!li) {
+              return;
+            }
+            var linkTypeId = this.value;
+            var linkTypeControls = li.appendChild(document.createElement('span'));
+            linkTypeControls.setAttribute('data-role', 'link-type-controls');
+            CATMAID.DOM.appendColorButton(linkTypeControls, 'c',
+              'Change the color of this link type',
+              undefined, undefined, {
+                initialColor: target.getLinkTypeColor(linkTypeId),
+                initialAlpha: target.getLinkTypeOpacity(linkTypeId),
+                onColorChange: target.updateLinkTypeColor.bind(window, linkTypeId)
+              });
+          });
+        }
+
+        // Add a selection handler
+        node.onchange = function(e) {
+          var visible = e.target.checked;
+          var linkTypeId = e.target.value;
+          target.setLinkTypeVisibility(linkTypeId, visible);
+          target.update();
+
+          // Add extra display controls for enabled volumes
+          var li = e.target.closest('li');
+          if (!li) {
+            return;
+          }
+          if (target.color) {
+            if (visible) {
+              var linkTypeControls = li.appendChild(document.createElement('span'));
+              linkTypeControls.setAttribute('data-role', 'link-type-controls');
+              CATMAID.DOM.appendColorButton(linkTypeControls, 'c',
+                'Change the color of this link type',
+                undefined, undefined, {
+                  initialColor: target.getLinkTypeColor(linkTypeId),
+                  initialAlpha: target.getLinkTypeOpacity(linkTypeId),
+                  onColorChange: target.updateLinkTypeColor.bind(target, linkTypeId)
+                });
+            } else {
+              var linkTypeControls = li.querySelector('span[data-role=link-type-controls]');
+              if (linkTypeControls) {
+                li.removeChild(linkTypeControls);
+              }
+            }
+          }
+        };
+        return node;
+      });
+    };
 
   // Export DOM namespace
   CATMAID.DOM = DOM;

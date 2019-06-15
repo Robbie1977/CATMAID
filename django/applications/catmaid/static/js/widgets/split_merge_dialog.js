@@ -16,6 +16,12 @@
     this.split = options.split;
     this.merge = options.merge;
 
+    // Sampler handling
+    this.samplerHandling = 'domain-end';
+
+    // Whether or not swapping is enabled
+    this.swapEnabled = true;
+
     // Models object
     this.models = {};
     this.models[model1.id] = model1;
@@ -35,7 +41,8 @@
     // Basic dialog setup
     CATMAID.Confirmation3dDialog.call(this, {
       id: "skeleton-split-merge-dialog",
-      title: this.in_merge_mode ? "Merge skeletons" : "Split skeletons"
+      title: this.in_merge_mode ? "Merge skeletons" : "Split skeletons",
+      close: options.close,
     });
   };
 
@@ -43,6 +50,10 @@
   SplitMergeDialog.prototype.constructor = SplitMergeDialog;
 
   SplitMergeDialog.prototype.swapSkeletons = function() {
+    if (!this.swapEnabled) {
+      CATMAID.warn("Swapping is disabled");
+      return;
+    }
     this.close();
 
     var newDialog = new CATMAID.SplitMergeDialog({
@@ -229,7 +240,8 @@
             arbor2 = skeleton2.createArbor(),
             length1 = arbor1.cableLength(skeleton.getPositions()),
             length2 = arbor2.cableLength(skeleton2.getPositions()),
-            over_length, under_length, over_skeleton, under_skeleton;
+            over_length, under_length, over_skeleton, under_skeleton,
+            losingNodeCount, winningNodeCount;
 
         var keepOrder = length1 >= length2 || !this.autoOrder;
 
@@ -241,6 +253,8 @@
           under_length = length2;
           over_skeleton = skeleton;
           under_skeleton = skeleton2;
+          losingNodeCount = arbor2.countNodes();
+          winningNodeCount = arbor1.countNodes();
         } else {
           this.over_model_id = this.model2_id;
           this.under_model_id = this.model1_id;
@@ -248,6 +262,8 @@
           under_length = length1;
           over_skeleton = skeleton2;
           under_skeleton = skeleton;
+          losingNodeCount = arbor1.countNodes();
+          winningNodeCount = arbor2.countNodes();
         }
 
         var winningModel = this.models[this.over_model_id];
@@ -258,7 +274,10 @@
 
         winningModel.color.copy(winningColor);
         losingModel.color.copy(losingColor);
-        this.webglapp.addSkeletons(this.models);
+        this.webglapp.addSkeletons(this.models)
+            .then((function() {
+              this.webglapp.render();
+            }).bind(this));
 
         var title = 'Merge skeleton "' + losingModel.baseName +
           '" into "' + winningModel.baseName + '"';
@@ -267,10 +286,10 @@
         // Update titles and name winning model first
         titleBig.appendChild(document.createTextNode(Math.round(over_length) +
             "nm cable in winning skeleton"));
-        titleBig.setAttribute('title', winningModel.baseName);
+        titleBig.setAttribute('title', winningModel.baseName + ' (' + winningNodeCount + ' nodes)');
         titleSmall.appendChild(document.createTextNode(Math.round(under_length) +
             "nm cable in losing skeleton"));
-        titleSmall.setAttribute('title', losingModel.baseName);
+        titleSmall.setAttribute('title', losingModel.baseName + ' (' + losingNodeCount + ' nodes)');
         // Color the small and big title boxes
         colorBig.style.backgroundColor = winningColor.getStyle();
         colorSmall.style.backgroundColor = losingColor.getStyle();
@@ -304,8 +323,11 @@
           positions[this.splitNodeId] = new THREE.Vector3(x, y, z);
         }
 
-        var length1 = arbor.subArbor(this.splitNodeId).cableLength(positions),
+        var newArbor = arbor.subArbor(this.splitNodeId),
+            length1 = newArbor.cableLength(positions),
             length2 = arbor.cableLength(positions) - length1,
+            nodeCount1 = newArbor.countNodes(),
+            nodeCount2 = arbor.countNodes() - nodeCount1,
             over_length, under_length,
             model_name = this.models[this.model1_id].baseName;
         this.upstream_is_small = length1 > length2;
@@ -313,17 +335,35 @@
         if (this.upstream_is_small) {
           over_length = length1;
           under_length = length2;
-          titleBig.setAttribute('title', "New");
-          titleSmall.setAttribute('title', model_name);
+          titleBig.setAttribute('title', "New (" + nodeCount1 + ' nodes)');
+          titleSmall.setAttribute('title', model_name + ' (' + nodeCount2 + ' nodes');
         } else {
           over_length = length2;
           under_length = length1;
-          titleBig.setAttribute('title', model_name);
-          titleSmall.setAttribute('title', "New");
+          titleBig.setAttribute('title', model_name + ' (' + nodeCount2 + ' nodes)');
+          titleSmall.setAttribute('title', "New" + ' (' + nodeCount1 + ' nodes)');
         }
         // Update dialog title
         var title = 'Split skeleton "' + model_name + '"';
-        $(this.dialog).dialog('option', 'title', title);
+        var $dialog = $(this.dialog).dialog('option', 'title', title);
+
+        // Add select-all checkoxes for annotations
+        var selectAllBig = colorBig.appendChild(document.createElement('input'));
+        selectAllBig.style.margin = '5%';
+        selectAllBig.setAttribute('type', 'checkbox');
+        selectAllBig.setAttribute('checked', 'true');
+        selectAllBig.setAttribute('title', 'Toggle annotations of remaining skeleton');
+        selectAllBig.onchange = function() {
+          $('input[type=checkbox]', contentBig).prop('checked', this.checked);
+        };
+        var selectAllSmall = colorSmall.appendChild(document.createElement('input'));
+        selectAllSmall.style.margin = '5%';
+        selectAllSmall.setAttribute('type', 'checkbox');
+        selectAllBig.setAttribute('title', 'Toggle annotations of new skeleton');
+        selectAllSmall.onchange = function() {
+          $('input[type=checkbox]', contentSmall).prop('checked', this.checked);
+        };
+
         // Add titles
         titleBig.appendChild(document.createTextNode(Math.round(over_length) +
               "nm cable in remaining skeleton"));
@@ -366,6 +406,89 @@
       }
 
       this.webglapp.render();
+
+      // If there is a sampler associated with this skeleton, ask the user for
+      // confirmation.
+      if (this.in_merge_mode) {
+        CATMAID.Skeletons.getAllSamplerCounts(project.id, [this.model1_id, this.model2_id])
+          .then((function(samplerCounts) {
+            // Only ask for user action if there is a sampler in either of the
+            // merge partners.
+            let samplerCount1 = samplerCounts[this.model1_id];
+            let samplerCount2 = samplerCounts[this.model2_id];
+            if (samplerCount1 > 0 || samplerCount2 > 0) {
+              let self = this;
+              // Swapping is for now not allowed when a sampler is merged.
+              this.swapEnabled = false;
+              // Check if the merged in fragment has linked samplers, if so show
+              // dialog that asks for user action. Check if the target node for
+              // the merge is part of a sampler domain. If so, ask for user
+              // action. If the merged-in fragment has no sampler and the target
+              // node is not part of a sampler domain, no user action is needed.
+              let buttons = {};
+              if (samplerCount1 > 0) {
+                //buttons['New intervals'] = self.setSamplerHandling.bind(self, 'create-intervals');
+                buttons['Branch'] = self.setSamplerHandling.bind(self, 'branch');
+                buttons['Domain end'] = self.setSamplerHandling.bind(self, 'domain-end');
+                buttons['New domain'] = self.setSamplerHandling.bind(self, 'new-domain');
+              }
+
+              buttons['Cancel'] = function() {
+                // Close dialog
+                self.close();
+              };
+
+              let dialog = new CATMAID.OptionsDialog("Sampler update needed", buttons);
+
+              let samplerNoun1 = samplerCount1 === 1 ? " sampler" : " samplers";
+              let samplerNoun2 = samplerCount2 === 1 ? " sampler" : " samplers";
+              if (samplerCount1 > 0) {
+                dialog.appendMessage("The active skeleton is currentely used in " +
+                    samplerCount1 + samplerNoun1 + ". There are multiple options " +
+                    "for how to handle this in a merge operation. In each " +
+                    "case, no swap operation is allowed and the sampled " +
+                    "skeleton will remain the \"winner\" of the merge to avoid a " +
+                    "re-rooting operation. If the fragment is merged outside of a " +
+                    "domain, the selected option has no effect.");
+
+                if (samplerCount2 > 0) {
+                  dialog.appendMessage("The merged-in fragment is used in " + samplerCount2 +
+                      "reconstruction " + samplerNoun2 + ". All samplers on " +
+                      "merged-in fragments will be deleted.");
+                } else {
+                  dialog.appendMessage("The merged-in fragment isn't used in any sampler.");
+                }
+
+                //dialog.appendHTML("<em>1. New intervals:</em> Extend domain and add intervals.");
+                dialog.appendHTML("<em>1. Branch:</em> Add nodes as traced out branch to existing interval.");
+                dialog.appendHTML("<em>2. Domain end:</em> End existing domain where fragment starts.");
+                dialog.appendHTML("<em>3. New domain:</em> Create a new domain for the merged in fragment.");
+              } else {
+                dialog.appendMessage("While the active skeleton isn't used in a " +
+                    "sampler, the merged-in fragment is used in " + samplerCount2 +
+                    "reconstruction " + samplerNoun2 + ". All samplers on " +
+                    "merged-in fragments will be deleted.");
+              }
+
+              dialog.show(550, 'auto', true);
+            }
+          }).bind(this))
+          .catch(CATMAID.handleError);
+      } else {
+        CATMAID.Skeletons.getSamplerCount(project.id, this.model1_id)
+          .then((function(samplerCount) {
+            if (samplerCount > 0) {
+              let samplerNoun = samplerCount > 1 ? " samplers" : " sampler";
+              if (!confirm("This skeleton has " + samplerCount +
+                  samplerNoun + " linked. A split will remove sampler " +
+                  "information from split-off fragments. Continue?")) {
+                // Close dialog
+                this.close();
+              }
+            }
+          }).bind(this))
+          .catch(CATMAID.handleError);
+      }
     }).bind(this));
 
     var self = this;
@@ -390,6 +513,12 @@
     }
 
     return this;
+  };
+
+  SplitMergeDialog.prototype.setSamplerHandling = function(samplerHandling) {
+    this.samplerHandling = samplerHandling;
+    $(this.dialog.parentNode).find('span.ui-dialog-title:first')
+        .append($('<span />').append(' using sampler handling "' + samplerHandling + '"'));
   };
 
   SplitMergeDialog.prototype.get_annotation_set = function(over) {

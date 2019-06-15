@@ -33,6 +33,7 @@
     this.appendWithBatchColor = false;
     this.gui = new this.GUI(this);
     this.orderLocked = false;
+    this.linkVisibilities = true;
 
     // Listen to change events of the active node and skeletons
     SkeletonAnnotations.on(SkeletonAnnotations.EVENT_ACTIVE_NODE_CHANGED,
@@ -42,6 +43,10 @@
     CATMAID.Annotations.on(CATMAID.Annotations.EVENT_ANNOTATIONS_CHANGED,
         this.handleAnnotationUpdate, this);
   };
+
+  // Skeleton properties that are referenced at various locations.
+  SelectionTable.KnownVisibilities = ['pre', 'post', 'text', 'meta'];
+  SelectionTable.KnownVisibilityFields = ['pre_visible', 'post_visible', 'text_visible', 'meta_visible'];
 
   SelectionTable._lastFocused = null; // Static reference to last focused instance
 
@@ -119,6 +124,19 @@
         annotate.onclick = this.annotate_skeleton_list.bind(this);
         buttons.appendChild(annotate);
 
+        var annotateName = document.createElement('input');
+        annotateName.setAttribute("type", "button");
+        annotateName.setAttribute("value", "Add name ann.");
+        annotateName.setAttribute('title', 'Add all neuron names as annotations, meta-annotated with "Name"');
+        annotateName.onclick = function() {
+          self.annotateSkeletonsWithName()
+            .then(function() {
+              CATMAID.msg("Success", "Added name annotations");
+            })
+            .catch(CATMAID.handleError);
+        };
+        buttons.appendChild(annotateName);
+
         var c = CATMAID.DOM.appendSelect(buttons, null, 'Color scheme ',
             ['CATMAID',
              'category10',
@@ -180,6 +198,21 @@
         lockOrderSettigs.appendChild(document.createTextNode(
               'Lock order'));
         buttons.appendChild(lockOrderSettigs);
+
+        var linkVizSettigsCb = document.createElement('input');
+        linkVizSettigsCb.setAttribute('type', 'checkbox');
+        linkVizSettigsCb.onchange = function() {
+          self.linkVisibilities = this.checked;
+        };
+        var linkVizSettigs = document.createElement('label');
+        linkVizSettigs.setAttribute('title', 'If unchecked, pre/post/text/meta ' +
+            'visibility can also be controlled for all skeletons regardless of ' +
+            'their visibility.');
+        linkVizSettigs.appendChild(linkVizSettigsCb);
+        linkVizSettigsCb.checked = this.linkVisibilities;
+        linkVizSettigs.appendChild(document.createTextNode(
+              'Link visibility'));
+        buttons.appendChild(linkVizSettigs);
       },
       createContent: function(content) {
         var self = this;
@@ -345,39 +378,9 @@
         CATMAID.annotations.add_autocomplete_to_input(
             $("#selection-table-ann-filter" + this.widgetID));
         this.init();
-        win.focus();
+        this.focus();
       },
-      helpText: [
-        '<p>This table allows to manipulate skeletons in batches. Skeletons ',
-        'can be collected to then use in other widgets such as the 3D Viewer. ',
-        'Skeletons can be selected from skeleton sources such as Active ',
-        'skeleton or from other open widgets using the ‘From’ drop-down and ',
-        'the Append button.</p>',
-        '<h3>Buttons</h3>',
-        '<dl class="keyboardShortcuts wide">',
-        '<dt><kbd>Clear</kbd></dt><dd>Removes ALL skeletons from the table</dd>',
-        '<dt><kbd>Refresh </kbd></dt><dd>Refreshes the table to reflect any updates made to listed skeletons such as Review status</dd>',
-        '<dt><kbd>Open</kbd></dt><dd>Skeleton batches previously saved can be loaded into the Selection Table</dd>',
-        '<dt><kbd>Save</kbd></dt><dd>Listed skeletons can be saved to a single json file</dd>',
-        '<dt><kbd>Annotate</kbd></dt><dd>Add annotations to selected skeletons</dd>',
-        '<dt><kbd>Color scheme</kbd></dt><dd>Specific color schemes can be selected to apply to the skeleton collection</dd>',
-        '<dt><kbd>Colorize</kbd></dt><dd>Applies selected color scheme to the skeleton collection</dd>',
-        '<dt><kbd>Measure</kbd></dt><dd>Opens the Measurement Table displaying basic metrics of selected skeletons</dd>',
-        '<dt><kbd>Summary Info</kbd></dt><dd>Opens a window displaying tracing metrics of selected skeletons</dd>',
-        '<dt><kbd>Append with batch color</kbd></dt><dd>Adds skeletons to the Selection table with current Batch color</dd>',
-        '<dt><kbd>Show visibility controls</kbd></dt><dd>Displays options to control visibility of skeletons in the 3D Viewer</dd>',
-        '</dl>',
-        '<h3>Columns</h3>',
-        '<dt>name</dt><dd>Names of skeletons</dd>',
-        '<dt>Filter</dt><dd>Listed skeletons can be filtered by name and annotations</dd>',
-        '<dt>Rev</dt><dd>Review status of listed skeletons. Default is Union (total) Review percentage.</dd>',
-        '<dt>Visibility Controls</dt><dd>Show/hide pre-, post-synaptic links to/from connector node</dd>',
-        '<dt>Text</dt><dd>Displays labels in 3D viewer</dd>',
-        '<dt>Meta</dt><dd>Displays tags as orange spheres</dd>',
-        '<dt>Action: Annotation</dt><dd>Add annotation to a given skeleton</dd>',
-        '<dt>Action: Summary info</dt><dd>Displays tracing metrics of given skeleton</dd>',
-        '<dt>Action: Neuron Navigator</dt><dd>Open Neuron Navigator page of given skeleton</dd>'
-      ].join('\n')
+      helpPath: 'selection-table.html',
     };
   };
 
@@ -535,7 +538,7 @@
   };
 
   /** Static access to the first selection table found. */
-  SelectionTable.prototype.getOrCreate = function() {
+  SelectionTable.getOrCreate = function() {
     var selection = SelectionTable.prototype.getFirstInstance();
     if (!selection) WindowMaker.create('selection-table');
     return SelectionTable.prototype.getFirstInstance();
@@ -547,7 +550,7 @@
 
   SelectionTable.getLastFocused = function () {
     if (SelectionTable._lastFocused === null)
-      SelectionTable._lastFocused = SelectionTable.prototype.getOrCreate();
+      SelectionTable._lastFocused = SelectionTable.getOrCreate();
 
     return SelectionTable._lastFocused;
   };
@@ -556,13 +559,23 @@
     this.all_visible = !this.all_visible;
     var updated = {};
     // Update table header
-    ['pre', 'post', 'text', 'meta'].forEach(function(suffix, i) {
-      if (2 === i && this.all_visible) return; // don't turn on text
-      $('#selection-table-show-all-' + suffix + this.widgetID).prop('checked', this.all_visible);
-    }, this);
+    if (this.linkVisibilities) {
+      SelectionTable.KnownVisibilities.forEach(function(suffix, i) {
+        if (2 === i && this.all_visible) return; // don't turn on text
+        this.all_items_visible[suffix] = this.all_visible;
+        $('#selection-table-show-all-' + suffix + this.widgetID).prop('checked',
+            this.all_items_visible[suffix]);
+      }, this);
+    }
     // Update models
-    this.filteredSkeletons(false).forEach(function(skeleton) {
+    this.filteredSkeletons().forEach(function(skeleton) {
         skeleton.setVisible(this.all_visible);
+        if (!this.linkVisibilities) {
+          for (let i=0; i<SelectionTable.KnownVisibilities.length; ++i) {
+            skeleton[SelectionTable.KnownVisibilityFields[i]] =
+                this.all_items_visible[SelectionTable.KnownVisibilities[i]];
+          }
+        }
         updated[skeleton.id] = skeleton.clone();
       }, this);
     if (!CATMAID.tools.isEmpty(updated)) {
@@ -578,7 +591,7 @@
   SelectionTable.prototype.toggleAllKeyUI = function(type) {
     var state = !this.all_items_visible[type];
     this.all_items_visible[type] = state;
-    var skeletons = this.filteredSkeletons(true);
+    var skeletons = this.filteredSkeletons(this.linkVisibilities);
     var key = type + '_visible';
     skeletons.forEach(function(skeleton) {
       skeleton[key] = state;
@@ -604,7 +617,7 @@
 
     $('#selection-table-show-all' + this.widgetID).click(this.toggleSelectAllSkeletonsUI.bind(this));
 
-    ['pre', 'post', 'text', 'meta'].forEach(function(suffix) {
+    SelectionTable.KnownVisibilities.forEach(function(suffix) {
       $('#selection-table-show-all-' + suffix + this.widgetID).click(this.toggleAllKeyUI.bind(this, suffix));
     }, this);
 
@@ -678,7 +691,7 @@
       if (!(skid in skeleton_ids)) a.push(parseInt(skid));
       return a;
     }, []);
-    CATMAID.fetch(project.id + '/skeleton/neuronnames', 'POST',
+    return CATMAID.fetch(project.id + '/skeleton/neuronnames', 'POST',
         {skids: ids})
       .then((function(json) {
         this.insertSkeletons(json, callback);
@@ -721,9 +734,11 @@
     if (this.review_filter === 'Self') postData.user_ids = [CATMAID.session.userid];
     CATMAID.fetch(project.id + '/skeletons/review-status', 'POST', postData)
       .then((function(json) {
-        var valid_skeletons = skeleton_ids.filter(function(skid) {
-          return !!this[skid];
+        var noReviewInfoSkeletonIds = skeleton_ids.filter(function(skid) {
+          return !this[skid];
         }, json);
+
+        var valid_skeletons = skeleton_ids;
 
         var addedModels = {};
         var updatedModels = {};
@@ -748,7 +763,7 @@
             return;
           }
           this.skeletons.push(model);
-          var counts = json[skeleton_id];
+          var counts = json[skeleton_id] || [1, 0];
           this.reviews[skeleton_id] = parseInt(Math.floor(100 * counts[1] / counts[0]));
           this.skeleton_ids[skeleton_id] = this.skeletons.length -1;
           addedModels[skeleton_id] = model;
@@ -773,15 +788,14 @@
         }
 
         // Notify user if not all skeletons are valid
-        var nInvalid = skeleton_ids.length - valid_skeletons.length;
-        if (0 !== nInvalid) {
+        if (0 !== noReviewInfoSkeletonIds.length) {
           var missing = skeleton_ids.filter(function(skid) {
             return !this[skid];
           }, json);
-          var msg = 'Could not load ' + nInvalid + ' skeletons, because they could ' +
-              'not be found. See details for more info.';
-          var detail =  'Thie following skeletons are missing: ' + missing.join(', ');
-          CATMAID.error(msg, detail);
+          var msg = 'Could not find review summary for ' + noReviewInfoSkeletonIds.length +
+              ' skeletons: ' + noReviewInfoSkeletonIds.join(', ');
+          CATMAID.warn(msg);
+          console.log(msg);
         }
       }).bind(this));
   };
@@ -1055,6 +1069,10 @@
   };
 
   SelectionTable.prototype.GUI.prototype.clear = function() {
+    if (this.datatable) {
+      // Reset pagination
+      this.datatable.page(0);
+    }
     this.update();
   };
 
@@ -1776,6 +1794,13 @@
       var reader = new FileReader();
       reader.onload = function(e) {
           var skeletons = JSON.parse(e.target.result);
+
+          // Check if the parsed data structure is in fact the expected array.
+          if (!(skeletons && skeletons instanceof Array)) {
+            CATMAID.warn('File has different format than expected');
+            return;
+          }
+
           // Make sure all skeletons have at least a skeleton ID
           var validSkeletons = skeletons.filter(function(s) {
             return s.skeleton_id !== undefined;
@@ -1788,8 +1813,8 @@
               {skids: skeletonIds})
             .then(function(json) {
               // Check if there are skeletons missing
-              var foundSkeletons = skeletonIds.filter(function(skid) {
-                return undefined !== json[skid];
+              var foundSkeletons = skeletons.filter(function(s) {
+                return undefined !== json[s.skeleton_id];
               });
               var missing = skeletonIds.length - foundSkeletons.length;
               if (missing> 0) {
@@ -1798,7 +1823,7 @@
               }
 
               // Create models for valid skeletons
-              var models = validSkeletons.reduce(function(m, s) {
+              var models = foundSkeletons.reduce(function(m, s) {
                 var color = s.color ? s.color : self.batchColor;
                 var name = json[s.skeleton_id];
                 var model = new CATMAID.SkeletonModel(s.skeleton_id, name,
@@ -1809,7 +1834,7 @@
               }, {});
 
               // Load models, respecting their order
-              self._append(models, skeletonIds);
+              self._append(models, foundSkeletons.map(s => s.skeleton_id));
           });
       };
       reader.readAsText(files[0]);

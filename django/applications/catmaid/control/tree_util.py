@@ -1,19 +1,15 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 # A 'tree' is a networkx.DiGraph with a single root node (a node without parents)
 
-import six
-
-from operator import itemgetter
-from networkx import Graph, DiGraph
 from collections import defaultdict
-from math import sqrt
 from itertools import islice
-from catmaid.models import Treenode
-from six.moves import range
+from math import sqrt
+from networkx import Graph, DiGraph
+from operator import itemgetter
+from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple
 
-from six.moves import zip as izip
+from catmaid.models import Treenode
 
 
 def find_root(tree):
@@ -24,12 +20,12 @@ def find_root(tree):
         if not next(tree.predecessors_iter(node), None):
             return node
 
-def edge_count_to_root(tree, root_node=None):
+def edge_count_to_root(tree, root_node=None) -> Dict:
     """ Return a map of nodeID vs number of edges from the first node that lacks predecessors (aka the root). If root_id is None, it will be searched for."""
     distances = {}
     count = 1
     current_level = [root_node if root_node else find_root(tree)]
-    next_level = []
+    next_level = [] # type: List
     while current_level:
         # Consume all elements in current_level
         while current_level:
@@ -41,7 +37,7 @@ def edge_count_to_root(tree, root_node=None):
         count += 1
     return distances
 
-def find_common_ancestor(tree, nodes, ds=None, root_node=None):
+def find_common_ancestor(tree, nodes, ds=None, root_node=None) -> Tuple[Any, Any]:
     """ Return the node in tree that is the nearest common ancestor to all nodes.
     Assumes that nodes contains at least 1 node.
     Assumes that all nodes are present in tree.
@@ -50,7 +46,7 @@ def find_common_ancestor(tree, nodes, ds=None, root_node=None):
         return nodes[0], 0
     distances = ds if ds else edge_count_to_root(tree, root_node=root_node)
     # Pick the pair with the shortest edge count to root
-    first, second = sorted(six.iteritems({node: distances(node) for node in nodes}), key=itemgetter(1))[:2]
+    first, second = sorted({node: distances(node) for node in nodes}.items(), key=itemgetter(1))[:2]
     # Start from the second, and bring it to an edge count equal to the first
     while second[1] < first[1]:
         second = (next(tree.predecessors_iter(second[0])), second[1] - 1)
@@ -79,7 +75,7 @@ def reroot(tree, new_root):
         parent = next(tree.predecessors_iter(parent), None)
     tree.add_path(path)
 
-def simplify(tree, keepers):
+def simplify(tree, keepers) -> Graph:
     """ Given a tree and a set of nodes to keep, create a new tree
     where only the nodes to keep and the branch points between them are preserved.
     WARNING: will reroot the tree at the first of the keepers.
@@ -95,7 +91,7 @@ def simplify(tree, keepers):
     reroot(tree, root)
     # For every keeper node, traverse towards the parent until
     # finding one that is in the minified graph, or is a branch node
-    children = defaultdict(int)
+    children = defaultdict(int) # type: DefaultDict[Any, int]
     seen_branch_nodes = set(keepers) # a copy
     paths = []
     # For all keeper nodes except the root
@@ -135,7 +131,7 @@ def partition(tree, root_node=None):
     one that finishes at the root.
     Each sequence runs from an end node to either the root or a branch node. """
     distances = edge_count_to_root(tree, root_node=root_node) # distance in number of edges from root
-    seen = set()
+    seen = set() # type: Set
     # Iterate end nodes sorted from highest to lowest distance to root
     endNodeIDs = (nID for nID in tree.nodes() if 0 == len(tree.successors(nID)))
     for nodeID in sorted(endNodeIDs, key=distances.get, reverse=True):
@@ -152,7 +148,7 @@ def partition(tree, root_node=None):
             yield sequence
 
 
-def spanning_tree(tree, preserve):
+def spanning_tree(tree, preserve) -> DiGraph:
     """ Return a new DiGraph with the spanning tree including the desired nodes.
     preserve: the set of nodes that delimit the spanning tree. """
     spanning = DiGraph()
@@ -192,10 +188,10 @@ def spanning_tree(tree, preserve):
 
     return spanning
 
-def cable_length(tree, locations):
+def cable_length(tree, locations) -> float:
     """ locations: a dictionary of nodeID vs iterable of node position (1d, 2d, 3d, ...)
     Returns the total cable length. """
-    return sum(sqrt(sum(pow(loc2 - loc1, 2) for loc1, loc2 in izip(locations[a], locations[b]))) for a,b in tree.edges_iter())
+    return sum(sqrt(sum(pow(loc2 - loc1, 2) for loc1, loc2 in zip(locations[a], locations[b]))) for a,b in tree.edges_iter())
 
 
 def lazy_load_trees(skeleton_ids, node_properties):
@@ -205,7 +201,7 @@ def lazy_load_trees(skeleton_ids, node_properties):
     in the django model of the Treenode table that is not the treenode id, parent_id
     or skeleton_id. """
 
-    values_list = ('id', 'parent_id', 'skeleton_id')
+    values_list = ('id', 'parent_id', 'skeleton_id') # type: Tuple[str, ...]
     props = tuple(set(node_properties) - set(values_list))
     values_list += props
 
@@ -213,7 +209,7 @@ def lazy_load_trees(skeleton_ids, node_properties):
             .order_by('skeleton') \
             .values_list(*values_list)
     skid = None
-    tree = None
+    tree = None # type: Optional[DiGraph]
     for t in ts:
         if t[2] != skid:
             if tree:
@@ -222,12 +218,12 @@ def lazy_load_trees(skeleton_ids, node_properties):
             skid = t[2]
             tree = DiGraph()
 
-        fields = {k: v for k,v in izip(props, islice(t, 3, 3 + len(props)))}
-        tree.add_node(t[0], fields)
+        fields = {k: v for k,v in zip(props, islice(t, 3, 3 + len(props)))}
+        tree.add_node(t[0], fields) # type: ignore # mypy cannot prove tree will have a value by this point
 
         if t[1]:
             # From child to parent
-            tree.add_edge(t[0], t[1])
+            tree.add_edge(t[0], t[1]) # type: ignore # mypy cannot prove tree will have a value by this point
 
     if tree:
         yield (skid, tree)

@@ -9,12 +9,12 @@
     // If this error is due to missing network access, handle it differently.
     if (err instanceof CATMAID.NetworkAccessError) {
       if (CATMAID) {
-        CATMAID.verifyNetworkAccess();
+        CATMAID.verifyNetworkAccess(err.message);
         CATMAID.warn('No network access');
         return;
       }
     }
-    console.group("Undhandled CATMAID error");
+    console.group("Unhandled CATMAID error");
     // Log the error detail to the console
     console.log(detail);
 
@@ -255,7 +255,7 @@
     var NETWORK_ACCESS_TEST_INTERVAL = 500;
     var networkTestTimeout;
     var warningSet = false;
-    var test = function() {
+    var test = function(errorMessage) {
       // If the back-end is not accessible, set a status bar warning and
       // test again periodically. Otherwise, clear the warning.
       CATMAID.testNetworkAccess()
@@ -270,7 +270,7 @@
             networkTestTimeout = undefined;
           } else {
             if (!warningSet) {
-              CATMAID.statusBar.setWarning("No network connection");
+              CATMAID.statusBar.setWarning(errorMessage || "No network connection");
               warningSet = true;
             }
             networkTestTimeout = window.setTimeout(test, NETWORK_ACCESS_TEST_INTERVAL);
@@ -278,10 +278,11 @@
         })
         .catch(CATMAID.handleError);
     };
-    return function() {
+    return function(errorMessage) {
       // Only start monitoring if no timeout is already active
       if (!networkTestTimeout) {
-        networkTestTimeout = window.setTimeout(test, NETWORK_ACCESS_TEST_INTERVAL);
+        networkTestTimeout = window.setTimeout(test.bind(window, errorMessage),
+            NETWORK_ACCESS_TEST_INTERVAL);
       }
     };
   })();
@@ -305,6 +306,10 @@
       } else if (error instanceof CATMAID.NoWebGLAvailableError) {
         CATMAID.error("WebGL is required, but not available. Please check " +
             "your browser settings or graphics card driver", error.message);
+      } else if (error instanceof CATMAID.InvalidLoginError) {
+        CATMAID.warn("Invalid login");
+      } else if (error instanceof CATMAID.InactiveLoginError) {
+        CATMAID.warn("Account is disabled");
       } else {
         CATMAID.error(error.message, error.detail);
       }

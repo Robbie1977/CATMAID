@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
+from io import StringIO
 import json
-import re
-import six
 import platform
+import re
+from typing import Any, Dict, List
+from unittest import skipIf
 
 from django.shortcuts import get_object_or_404
 from guardian.shortcuts import assign_perm
@@ -14,10 +15,6 @@ from catmaid.models import Log, Review, Treenode, TreenodeConnector
 from catmaid.models import ReviewerWhitelist
 
 from .common import CatmaidApiTestCase
-
-from unittest import skipIf
-
-from six import StringIO
 
 # Some skeleton back-end functionality is not available if PyPy is used. This
 # variable is used to skip the respective tests (which otherwise would fail).
@@ -97,6 +94,142 @@ class SkeletonsApiTests(CatmaidApiTestCase):
             self.assertEqual(tn.location_y, new_tn.location_y)
             self.assertEqual(tn.location_z, new_tn.location_z)
             self.assertEqual(max(tn.radius, 0), max(new_tn.radius, 0))
+
+
+        # Remember current edit time for later
+        last_neuron_id = neuron.id
+        last_skeleton_id = skeleton.id
+        last_neuron_edit_time = neuron.edition_time
+        last_skeleton_edit_time = skeleton.edition_time
+
+
+        # Test replacing the imported neuron without forcing an update and
+        # auto_id disabled.
+        swc_file2 = StringIO(orig_swc_string)
+        response = self.client.post('/%d/skeletons/import' % (self.test_project_id,),
+                {'file.swc': swc_file2, 'name': 'test2', 'neuron_id':
+                    neuron.id, 'auto_id': False})
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        expected_result = {
+                "error": "The passed in neuron ID is already in use and neither of the parameters force or auto_id are set to true."}
+        for k,v in expected_result.items():
+            self.assertTrue(k in parsed_response)
+            self.assertEqual(parsed_response[k], v)
+
+
+        # Test replacing the imported neuron without forcing an update and
+        # auto_id enabled (default).
+        swc_file2 = StringIO(orig_swc_string)
+        response = self.client.post('/%d/skeletons/import' % (self.test_project_id,),
+                {'file.swc': swc_file2, 'name': 'test2', 'neuron_id':
+                    neuron.id})
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+
+        # Make sure there is still only one skeleton
+        neuron.refresh_from_db()
+        linked_skeletons = ClassInstanceClassInstance.objects.filter(
+                class_instance_b_id=neuron.id,
+                relation__relation_name='model_of',
+                class_instance_a__class_column__class_name='skeleton')
+        self.assertEqual(len(linked_skeletons), 1)
+        self.assertEqual(neuron.name, 'test')
+        self.assertEqual(neuron.id, last_neuron_id)
+        self.assertEqual(neuron.edition_time, last_neuron_edit_time)
+        self.assertNotEqual(neuron.id, parsed_response['neuron_id'])
+
+
+        # Test replacing the imported neuron with forcing an update
+        swc_file2 = StringIO(orig_swc_string)
+        response = self.client.post('/%d/skeletons/import' % (self.test_project_id,),
+                {'file.swc': swc_file2, 'name': 'test2', 'neuron_id': neuron.id,
+                    'force': True})
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+
+        # Make sure there is still only one skeleton
+        neuron.refresh_from_db()
+        replaced_skeletons = ClassInstanceClassInstance.objects.filter(
+                class_instance_b_id=neuron.id,
+                relation__relation_name='model_of',
+                class_instance_a__class_column__class_name='skeleton')
+        self.assertEqual(len(replaced_skeletons), 1)
+        self.assertEqual(neuron.id, parsed_response['neuron_id'])
+        self.assertEqual(neuron.name, 'test2')
+        self.assertEqual(neuron.id, last_neuron_id)
+        self.assertNotEqual(neuron.edition_time, last_neuron_edit_time)
+
+
+        # Make sure we work with most recent skeleton data
+        skeleton = ClassInstance.objects.get(pk=parsed_response['skeleton_id'])
+
+        # Test replacing the imported skeleton without forcing an update and
+        # auto_id disabled.
+        swc_file2 = StringIO(orig_swc_string)
+        response = self.client.post('/%d/skeletons/import' % (self.test_project_id,),
+                {'file.swc': swc_file2, 'name': 'test2', 'skeleton_id':
+                    skeleton.id, 'auto_id': False})
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        expected_result = {
+                "error": "The passed in skeleton ID is already in use and neither of the parameters force or auto_id are set to true."}
+        for k,v in expected_result.items():
+            self.assertTrue(k in parsed_response)
+            self.assertEqual(parsed_response[k], v)
+
+
+        # Test replacing the imported skeleton without forcing an update and
+        # auto_id enabled (default).
+        swc_file2 = StringIO(orig_swc_string)
+        response = self.client.post('/%d/skeletons/import' % (self.test_project_id,),
+                {'file.swc': swc_file2, 'name': 'test3', 'skeleton_id':
+                    skeleton.id})
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        last_skeleton_id = skeleton.id
+        neuron = ClassInstance.objects.get(pk=parsed_response['neuron_id'])
+        skeleton = ClassInstance.objects.get(pk=parsed_response['skeleton_id'])
+
+
+        # Make sure there is still only one skeleton
+        linked_neurons = ClassInstanceClassInstance.objects.filter(
+                class_instance_a_id=skeleton.id,
+                relation__relation_name='model_of',
+                class_instance_b__class_column__class_name='neuron')
+        self.assertEqual(len(linked_neurons), 1)
+        self.assertEqual(neuron.name, 'test3')
+        self.assertEqual(skeleton.name, 'test3')
+        self.assertNotEqual(neuron.id, last_neuron_id)
+        self.assertNotEqual(last_skeleton_id, skeleton.id) 
+
+
+        # Test replacing the imported neuron with forcing an update
+        swc_file2 = StringIO(orig_swc_string)
+        response = self.client.post('/%d/skeletons/import' % (self.test_project_id,),
+                {'file.swc': swc_file2, 'name': 'test2', 'skeleton_id': skeleton.id,
+                    'force': True})
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+
+        last_skeleton_edit_time = skeleton.edition_time
+        # Make sure there is still only one skeleton
+        skeleton.refresh_from_db()
+
+        replaced_neurons = ClassInstanceClassInstance.objects.filter(
+                class_instance_a_id=skeleton.id,
+                relation__relation_name='model_of',
+                class_instance_b__class_column__class_name='neuron')
+        self.assertEqual(len(replaced_neurons), 1)
+        self.assertEqual(skeleton.id, parsed_response['skeleton_id'])
+        self.assertEqual(skeleton.name, 'test2')
+        self.assertNotEqual(skeleton.edition_time, last_skeleton_edit_time)
 
 
     def test_skeleton_contributor_statistics(self):
@@ -261,7 +394,8 @@ class SkeletonsApiTests(CatmaidApiTestCase):
             '/%d/skeletons/connectivity' % (self.test_project_id,),
             {'source_skeleton_ids[0]': 235,
              'source_skeleton_ids[1]': 373,
-             'boolean_op': 'OR'})
+             'boolean_op': 'OR',
+             'link_types': ['incoming', 'outgoing', 'gapjunction', 'attachment']})
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
         expected_result = {
@@ -270,10 +404,10 @@ class SkeletonsApiTests(CatmaidApiTestCase):
                          "373": {"skids": {"235": [0, 0, 0, 0, 2]}, "num_nodes": 5}},
             "incoming": {"235": {"skids": {"373": [0, 0, 0, 0, 2]}, "num_nodes": 28}},
             "incoming_reviewers": [],
-            "gapjunctions": {},
-            "gapjunctions_reviewers": [],
-            "attachments": {},
-            "attachments_reviewers": []}
+            "gapjunction": {},
+            "gapjunction_reviewers": [],
+            "attachment": {},
+            "attachment_reviewers": []}
         self.assertEqual(expected_result, parsed_response)
 
         # Test for conjunctive connectivity.
@@ -281,7 +415,8 @@ class SkeletonsApiTests(CatmaidApiTestCase):
             '/%d/skeletons/connectivity' % (self.test_project_id,),
             {'source_skeleton_ids[0]': 235,
              'source_skeleton_ids[1]': 373,
-             'boolean_op': 'AND'})
+             'boolean_op': 'AND',
+             'link_types': ['incoming', 'outgoing', 'gapjunction', 'attachment']})
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
         expected_result = {
@@ -289,10 +424,10 @@ class SkeletonsApiTests(CatmaidApiTestCase):
             "outgoing": {},
             "incoming": {},
             "incoming_reviewers": [],
-            "gapjunctions": {},
-            "gapjunctions_reviewers": [],
-            "attachments": {},
-            "attachments_reviewers": []}
+            "gapjunction": {},
+            "gapjunction_reviewers": [],
+            "attachment": {},
+            "attachment_reviewers": []}
         self.assertEqual(expected_result, parsed_response)
 
 
@@ -396,7 +531,7 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
         expected_result = [2468, 2388, 235, 2411, 2364]
-        six.assertCountEqual(self, expected_result, parsed_response['skeletons'])
+        self.assertCountEqual(expected_result, parsed_response['skeletons'])
 
         response = self.client.post(
                 '/%d/skeletons/within-spatial-distance' % (self.test_project_id,),
@@ -404,7 +539,7 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
         expected_result = [2462, 2433, 373]
-        six.assertCountEqual(self, expected_result, parsed_response['skeletons'])
+        self.assertCountEqual(expected_result, parsed_response['skeletons'])
 
 
     def test_skeleton_permissions(self):
@@ -529,6 +664,74 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         self.assertEqual(expected_result, parsed_response)
 
 
+    def test_skeleton_connectivity_matrix_with_locations(self):
+        self.fake_authentication()
+
+        skeleton_ids = [235, 361, 373, 2364, 2388, 2411]
+        params = {
+            'with_locations': True
+        } # type: Dict[str, Any]
+        for i, k in enumerate(skeleton_ids):
+            params['rows[%d]' % i] = k
+            params['columns[%d]' % i] = k
+        response = self.client.post(
+                '/%d/skeleton/connectivity_matrix' % (self.test_project_id,),
+                params)
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        expected_result = {
+            "235": {
+                "373": {
+                    "count": 2,
+                    "locations": {
+                        "356": {
+                            "pos": [6730.0, 2700.0, 0.0],
+                            "count": 1
+                        },
+                        "421": {
+                            "pos": [6260.0, 3990.0, 0.0],
+                            "count": 1
+                        }
+                    }
+                },
+                "361": {
+                    "count": 1,
+                    "locations": {
+                        "356": {
+                            "pos": [6730.0, 2700.0, 0.0],
+                            "count": 1
+                        }
+                    }
+                }
+            },
+            "2388": {
+                "2364": {
+                    "count": 1,
+                    "locations": {
+                        "2400": {
+                            "pos": [3400.0, 5620.0, 0.0],
+                            "count": 1
+                        }
+                    }
+                }
+            },
+            "2411": {
+                "2364": {
+                    "count": 1,
+                    "locations": {
+                        "2400": {
+                            "pos": [3400.0, 5620.0, 0.0],
+                            "count": 1
+                        }
+                    }
+                }
+            }
+        }
+
+
+        self.assertEqual(expected_result, parsed_response)
+
+
     def test_skeleton_list(self):
         self.fake_authentication()
 
@@ -545,13 +748,13 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         # Query skeletons of user 2
         response = self.client.get(url, {'created_by': 2})
         parsed_response = json.loads(response.content.decode('utf-8'))
-        expected_result = [2364]
+        expected_result = [2364] # type: ignore # mypy doesn't like this variable reuse with different types
         self.assertEqual(expected_result, parsed_response)
 
         # Query skeletons of user 2 on a date where no neuron was created
         response = self.client.get(url, {'created_by': 2, 'to': '19990505'})
         parsed_response = json.loads(response.content.decode('utf-8'))
-        expected_result = []
+        expected_result = [] # type: ignore
         self.assertEqual(expected_result, parsed_response)
 
         # Query skeletons of user 3 on a date where neurons where created
@@ -697,7 +900,7 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         parsed_response = json.loads(response.content.decode('utf-8'))
         expected_result = {
                 'newroot': 2394,
-                'skeleton_id': 2388}
+                'skeleton_id': 2388} # type: Dict[str, Any]
         self.assertEqual(expected_result, parsed_response)
 
         response = self.client.post(
@@ -735,7 +938,7 @@ class SkeletonsApiTests(CatmaidApiTestCase):
                 {'skids[0]': 235, 'skids[1]': 373})
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
-        [[[c.sort() for c in six.itervalues(p)] for p in six.itervalues(t)] for t in six.itervalues(parsed_response)]
+        [[[c.sort() for c in p.values()] for p in t.values()] for t in parsed_response.values()]
         expected_result = {
             '235': {
                 'presynaptic_to': {
@@ -762,7 +965,7 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
-        expected_result = {}
+        expected_result = {} # type: Dict[str, Any]
         self.assertEqual(expected_result, parsed_response)
 
         review_time = "2014-03-17T18:14:34.851Z"
@@ -860,9 +1063,9 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         response = self.client.post(url)
         self.assertEqual(response.status_code, 200)
         expected_result = [{'status': '0.00', 'id': 0, 'nr_nodes': 3, 'sequence': [
-                {'y': 6550.0, 'x': 3680.0, 'z': 0.0, 'rids': [], 'sup': [], 'id': 2396},
-                {'y': 6030.0, 'x': 3110.0, 'z': 0.0, 'rids': [], 'sup': [], 'id': 2394},
-                {'y': 6080.0, 'x': 2370.0, 'z': 0.0, 'rids': [], 'sup': [], 'id': 2392}]}]
+                {'y': 6550.0, 'x': 3680.0, 'z': 0.0, 'rids': [], 'sup': [], 'user_id': 3, 'id': 2396},
+                {'y': 6030.0, 'x': 3110.0, 'z': 0.0, 'rids': [], 'sup': [], 'user_id': 3, 'id': 2394},
+                {'y': 6080.0, 'x': 2370.0, 'z': 0.0, 'rids': [], 'sup': [], 'user_id': 3, 'id': 2392}]}]
         self.assertJSONEqual(response.content.decode('utf-8'), expected_result)
 
         # Add reviews
@@ -876,9 +1079,9 @@ class SkeletonsApiTests(CatmaidApiTestCase):
         response = self.client.post(url)
         self.assertEqual(response.status_code, 200)
         expected_result = [{'status': '66.67', 'id': 0, 'nr_nodes': 3, 'sequence': [
-                {'y': 6550.0, 'x': 3680.0, 'z': 0.0, 'rids': [[3, review_time], [2, review_time]], 'sup': [], 'id': 2396},
-                {'y': 6030.0, 'x': 3110.0, 'z': 0.0, 'rids': [[3, review_time]], 'sup': [], 'id': 2394},
-                {'y': 6080.0, 'x': 2370.0, 'z': 0.0, 'rids': [], 'sup': [], 'id': 2392}]}]
+                {'y': 6550.0, 'x': 3680.0, 'z': 0.0, 'rids': [[3, review_time], [2, review_time]], 'sup': [], 'user_id': 3, 'id': 2396},
+                {'y': 6030.0, 'x': 3110.0, 'z': 0.0, 'rids': [[3, review_time]], 'sup': [], 'user_id': 3, 'id': 2394},
+                {'y': 6080.0, 'x': 2370.0, 'z': 0.0, 'rids': [], 'sup': [], 'user_id': 3, 'id': 2392}]}]
         self.assertJSONEqual(response.content.decode('utf-8'), expected_result)
 
         # Newer reviews of same nodes should duplicate reviewer ID

@@ -7,7 +7,6 @@
 #
 # Experiments
 #
-from __future__ import unicode_literals
 
 import copy
 import json
@@ -611,7 +610,7 @@ class Ontology(object):
                 raise ValueError("Class path component not found: " + str(path))
 
         cls = node.get('values').get(instance).get('class') if node else None
-        print ("Ontology", cls, cls.id)
+        print("Ontology", cls, cls.id)
         return cls
 
     def load(self, schema, project, user, parent=None, parent_rel=None):
@@ -894,7 +893,7 @@ class AnnotationTree(object):
                 path.append(props['class'])
                 # Path will be something like ["Presence", "
                 cls = self.ontology.get_class(path)
-                print (path, ci_parent_rel, ci_parent, ci_name, props, cls)
+                print(path, ci_parent_rel, ci_parent, ci_name, props, cls)
                 if not cls:
                     raise ValueError("Couldn't find path in ontology: " + str(path))
                 # Concrete class isn't needed anymore on stack

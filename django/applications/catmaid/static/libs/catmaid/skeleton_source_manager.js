@@ -397,10 +397,13 @@
     $('.skeleton-source-select').each(function(index, select) {
       var name = $(this).data('name');
       var extraFilters = $(this).data('filters');
+      var nEntries = select.options.length;
 
-      var selectedIndex = select.selectedIndex === -1 ? 0 : select.selectedIndex;
-      var selected = select.options[selectedIndex].value;
-      select.options.length = select.options[0].value === 'None' ? 1 : 0; // preserve manually added initial void entry when present in push selects
+      var selectedIndex = (nEntries > 0 && select.selectedIndex === -1) ?
+          0 : select.selectedIndex;
+      var selected = selectedIndex === -1 ? null : select.options[selectedIndex].value;
+      select.options.length = (nEntries > 0 && select.options[0].value === 'None') ?
+          1 : 0; // preserve manually added initial void entry when present in push selects
       select.selectedIndex = 0;
       options().forEach(function(option, i) {
         // Ignore self
@@ -411,7 +414,9 @@
         }
 
         select.options.add(option);
-        if (option.value === selected) select.selectedIndex = select.options.length -1;
+        if (selectedIndex !== -1 && option.value === selected) {
+          select.selectedIndex = select.options.length - 1;
+        }
       });
     });
   };
@@ -453,8 +458,17 @@
 
     // Get ordererd sources up to where 'name' was added
     var nameIndex = this.orderedSources.indexOf(name);
-    var selectedSourceName = this.defaultSelectLastSource && nameIndex > 0 ?
-      this.orderedSources[nameIndex - 1] : SkeletonAnnotations.activeSkeleton.getName();
+    var selectLast = this.defaultSelectLastSource && nameIndex > 0;
+    var currentIndex = nameIndex - 1;
+    while (currentIndex > 0) {
+      if (this.sources[this.orderedSources[currentIndex]].noDefaultSelection) {
+        --currentIndex;
+      } else {
+        break;
+      }
+    }
+    var selectedSourceName = selectLast ? this.orderedSources[currentIndex] :
+        SkeletonAnnotations.activeSkeleton.getName();
 
     this.createOptions().forEach(function(option, i) {
       // Ignore this option if it should be filtered.

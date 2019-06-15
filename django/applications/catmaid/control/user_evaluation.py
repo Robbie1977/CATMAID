@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
-import json
-import pytz
-import six
-
-from datetime import datetime, timedelta
 from collections import defaultdict, namedtuple
-from networkx import connected_components
+from datetime import datetime, timedelta
 from functools import partial
+import json
+from networkx import connected_components
+import pytz
+from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 
 from django.db.models import Count
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 
 from catmaid.models import Treenode, Log, Relation, TreenodeConnector, \
         UserRole, Review
@@ -19,11 +17,8 @@ from catmaid.control.review import get_review_status
 from catmaid.control.authentication import requires_user_role
 from catmaid.control.tree_util import lazy_load_trees
 
-# Python 2 and 3 compatible map iterator
-from six.moves import map
 
-
-def _find_nearest(tree, nodes, loc1):
+def _find_nearest(tree, nodes, loc1) -> Tuple[Any, float]:
     """ Returns a tuple of the closest node and the square of the distance. """
     min_sqdist = float('inf')
     for node in nodes:
@@ -35,12 +30,12 @@ def _find_nearest(tree, nodes, loc1):
             min_sqdist = dsq
             closest = node
 
-    return node, min_sqdist
+    return closest, min_sqdist
 
 def _parse_location(loc):
     return map(float, loc[1:-1].split(','))
 
-def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
+def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations) -> List:
     """ Evaluate each epoch:
     1. Detect merges done by the reviewer: one of the two nodes is edited by the reviewer within the review epoch (but not both: could be a reroot then), with a corresponding join_skeleton entry in the log table. Perhaps the latter is enough, if the x,y,z of the log corresponds to that of the node (plus/minus a tiny bit, may have moved).
     2. Detect additions by the reviewer (a kind of merge), where the reviewer's node is newer than the other node, and it was created within the review epoch. These nodes would have been created and reviewed by the reviewer within the review epoch.
@@ -64,7 +59,7 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
     epoch_ops = []
 
     # Synapses on the arbor: keyed by treenode_id
-    all_synapses = defaultdict(list)
+    all_synapses = defaultdict(list) # type: DefaultDict[Any, List]
     for s in TreenodeConnector.objects.filter(skeleton=skeleton_id,
                                               relation__in=(relations['presynaptic_to'],
                                                             relations['postsynaptic_to'])):
@@ -82,16 +77,16 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
         def default_dates():
             return {'start': datetime.max.replace(tzinfo=pytz.utc),
                     'end': datetime.min.replace(tzinfo=pytz.utc)}
-        user_ranges = defaultdict(default_dates)
+        user_ranges = defaultdict(default_dates) # type: DefaultDict[Any, Dict[str, Any]]
 
         # Node counts per user
-        user_node_counts = defaultdict(int)
+        user_node_counts = defaultdict(int) # type: DefaultDict[Any, int]
 
         # Synapses for the set of nodes reviewed in this epoch, keyed by user_id and relation
-        nodes_synapses = defaultdict(partial(defaultdict, list))
+        nodes_synapses = defaultdict(partial(defaultdict, list)) # type: DefaultDict
 
         # Synapses, keyed by user and relation, created by a user other than the user who created the treenode, after the treeenode's creation time
-        newer_synapses_count = defaultdict(partial(defaultdict, int))
+        newer_synapses_count = defaultdict(partial(defaultdict, int)) # type: DefaultDict
 
         for node in nodes:
             props = tree.node[node]
@@ -122,12 +117,12 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
             return start_date <= date <= end_date
 
         # Total number of synapses related to nodes reviewed within the epoch
-        epoch_n_pre = sum(len(r.get(relations['presynaptic_to'], [])) for r in six.itervalues(nodes_synapses))
-        epoch_n_post = sum(len(r.get(relations['postsynaptic_to'], [])) for r in six.itervalues(nodes_synapses))
+        epoch_n_pre = sum(len(r.get(relations['presynaptic_to'], [])) for r in nodes_synapses.values())
+        epoch_n_post = sum(len(r.get(relations['postsynaptic_to'], [])) for r in nodes_synapses.values())
 
         # Find out synapses added by the reviewer within the epoch, keyed by treenode user
-        reviewer_n_pre = defaultdict(int)
-        reviewer_n_post = defaultdict(int)
+        reviewer_n_pre = defaultdict(int) # type: DefaultDict[Any, int]
+        reviewer_n_post = defaultdict(int) # type: DefaultDict[Any, int]
         reviewer_synapses = nodes_synapses.get(reviewer_id)
 
         if reviewer_synapses:
@@ -158,9 +153,9 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
         # of the join_skeleton contains two skeleton IDs is solved by
         # the fact that of these, only one skeleton survives the merge,
         # and it is always the one in question by definition.
-        splits = defaultdict(int)
-        merges = defaultdict(int)
-        appended = defaultdict(list)
+        splits = defaultdict(int) # type: DefaultDict[Any, int]
+        merges = defaultdict(int) # type: DefaultDict[Any, int]
+        appended = defaultdict(list) # type: DefaultDict[Any, List]
 
         epoch_ops.append(EpochOps(reviewer_id, date_range, user_ranges,
             user_node_counts, splits, merges, appended, len(nodes),
@@ -184,7 +179,7 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
                 edges = tree[node]
                 if edges:
                     # Replace node with its parent
-                    node = next(six.iterkeys(edges))
+                    node = next(edges.keys())
                 merges[tree.node[node]['user_id']] += 1
 
         # Count nodes created by the reviewer, as well as
@@ -207,7 +202,7 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
                 for node in addition:
                     edges = tree[node]
                     if edges:
-                        parent = next(six.iterkeys(edges))
+                        parent = next(edges.keys())
                         creator_id = tree.node[parent]['user_id']
                         if creator_id != reviewer_id:
                             appended[creator_id].append(len(addition))
@@ -216,7 +211,7 @@ def _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations):
 
     return epoch_ops
 
-def _split_into_epochs(skeleton_id, tree, reviews, max_gap):
+def _split_into_epochs(skeleton_id, tree, reviews, max_gap) -> List:
     """ Split the arbor into one or more review epochs.
     An epoch is defined as a continuous range of time containing gaps
     of up to max_gap (e.g. 3 days) and fully reviewed by the same reviewer.
@@ -260,14 +255,14 @@ def _split_into_epochs(skeleton_id, tree, reviews, max_gap):
     return epochs
 
 
-def _evaluate_arbor(user_id, skeleton_id, tree, reviews, relations, max_gap):
+def _evaluate_arbor(user_id, skeleton_id, tree, reviews, relations, max_gap) -> List:
     """ Split the arbor into review epochs and then evaluate each independently. """
     epochs = _split_into_epochs(skeleton_id, tree, reviews, max_gap)
     epoch_ops = _evaluate_epochs(epochs, skeleton_id, tree, reviews, relations)
     return epoch_ops
 
 
-def _evaluate(project_id, user_id, start_date, end_date, max_gap, min_nodes):
+def _evaluate(project_id, user_id, start_date, end_date, max_gap, min_nodes) -> Optional[List[Dict]]:
 
     # Obtain neurons that are fully reviewed at the moment
     # and to which the user contributed nodes within the date range.
@@ -290,7 +285,7 @@ def _evaluate(project_id, user_id, start_date, end_date, max_gap, min_nodes):
     review_status = get_review_status(skeleton_ids)
 
     not_fully_reviewed = set()
-    for skid, status in six.iteritems(review_status):
+    for skid, status in review_status.items():
         if status[0] != status[1]:
             not_fully_reviewed.add(skid)
 
@@ -300,13 +295,13 @@ def _evaluate(project_id, user_id, start_date, end_date, max_gap, min_nodes):
         return None
 
     # Get review information and organize it by skeleton ID and treenode ID
-    reviews = defaultdict(lambda: defaultdict(list))
+    reviews = defaultdict(lambda: defaultdict(list)) # type: DefaultDict
     for r in Review.objects.filter(skeleton_id__in=skeleton_ids):
         reviews[r.skeleton_id][r.treenode_id].append(r)
 
     # Sort all reviews of all treenodes by review time, most recent first
-    for skid, tid_to_rs in six.iteritems(reviews):
-        for tid, rs in six.iteritems(tid_to_rs):
+    for skid, tid_to_rs in reviews.items():
+        for tid, rs in tid_to_rs.items():
             rs.sort(key=lambda r: r.review_time)
             rs.reverse()
 
@@ -341,7 +336,7 @@ def _evaluate(project_id, user_id, start_date, end_date, max_gap, min_nodes):
 
     d = []
 
-    for skid, arbor_epoch_ops in six.iteritems(evaluations):
+    for skid, arbor_epoch_ops in evaluations.items():
         for epoch_ops in arbor_epoch_ops:
             if 0 == epoch_ops.user_node_counts[user_id]:
                 # user did not contribute at all to this chunk
@@ -367,11 +362,11 @@ def _evaluate(project_id, user_id, start_date, end_date, max_gap, min_nodes):
 
 def _parse_date(s):
     """ Accepts a date as e.g. '2012-10-07' """
-    return datetime(*(map(int, s.split('-'))))
+    return datetime(*(map(int, s.split('-')))) # type: ignore
 
 # TODO a better fit would be an admin or staff user
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def evaluate_user(request, project_id=None):
+def evaluate_user(request:HttpRequest, project_id=None) -> JsonResponse:
     user_id = int(request.POST.get('user_id'))
     # Dates as strings e.g. "2012-10-07"
     start_date = _parse_date(request.POST.get('start_date'))

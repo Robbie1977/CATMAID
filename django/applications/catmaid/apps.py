@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
-import six
 import logging
 
-from catmaid import history
+from catmaid import history, spatial
 
 from django.apps import AppConfig
 from django.conf import settings
@@ -16,6 +14,15 @@ from django.db.models import signals
 from django.db.backends import signals as db_signals
 from django.contrib import auth
 from django.contrib.auth.management.commands import createsuperuser
+
+try:
+    import rpy2.rinterface as rinterface
+    r_available = True
+except ImportError:
+    r_available = False
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_system_user(user_model=None):
@@ -94,12 +101,31 @@ def check_history_setup(app_configs, **kwargs):
     # Ignore silently, if the database wasn't migrated yet.
     if getattr(settings, 'HISTORY_TRACKING', True):
         run = history.enable_history_tracking(True)
+        logger.info('History tracking enabled')
     else:
         run = history.disable_history_tracking(True)
+        logger.info('History tracking disabled')
 
     if not run:
         messages.append(Warning(
             "Couldn't check history setup, missing database functions",
+            hint="Migrate CATMAID"))
+    return messages
+
+def check_spatial_update_setup(app_configs, **kwargs):
+    messages = []
+    # Enable or disable history tracking, depending on the configuration.
+    # Ignore silently, if the database wasn't migrated yet.
+    if getattr(settings, 'SPATIAL_UPDATE_NOTIFICATIONS', False):
+        run = spatial.enable_spatial_update_events(True)
+        logger.info('Spatial update events enabled')
+    else:
+        run = spatial.disable_spatial_update_events(True)
+        logger.info('Spatial update events disabled')
+
+    if not run:
+        messages.append(Warning(
+            "Couldn't check spatial update notification setup, missing database functions",
             hint="Migrate CATMAID"))
     return messages
 
@@ -124,6 +150,9 @@ class CATMAIDConfig(AppConfig):
 
     def ready(self):
         """Perform initialization for back-end"""
+        logger.info("CATMAID version {}".format(settings.VERSION))
+
+        # Make sure all settings variables are of the type we expect.
         self.validate_configuration()
 
         # If prepared statements are enabled, make sure they are created for
@@ -144,10 +173,17 @@ class CATMAIDConfig(AppConfig):
         # Register history checks
         register(check_history_setup)
 
+        # Enable or disable spatial update notifications
+        register(check_spatial_update_setup)
+
+        # Init R interface, which is used by some parts of CATMAID
+        if r_available:
+            rinterface.initr()
+
     # A list of settings that are expected to be available.
     required_setting_fields = {
-        "VERSION": six.string_types,
-        "CATMAID_URL": six.string_types,
+        "VERSION": str,
+        "CATMAID_URL": str,
         "ONTOLOGY_DUMMY_PROJECT_ID": int,
         "PROFILE_INDEPENDENT_ONTOLOGY_WORKSPACE_IS_DEFAULT": bool,
         "PROFILE_SHOW_TEXT_LABEL_TOOL": bool,
@@ -162,23 +198,23 @@ class CATMAIDConfig(AppConfig):
         "IMPORTER_DEFAULT_TILE_WIDTH": int,
         "IMPORTER_DEFAULT_TILE_HEIGHT": int,
         "IMPORTER_DEFAULT_TILE_SOURCE_TYPE": int,
-        "IMPORTER_DEFAULT_IMAGE_BASE": six.string_types,
-        "MEDIA_HDF5_SUBDIRECTORY": six.string_types,
-        "MEDIA_CROPPING_SUBDIRECTORY": six.string_types,
-        "MEDIA_ROI_SUBDIRECTORY": six.string_types,
-        "MEDIA_TREENODE_SUBDIRECTORY": six.string_types,
+        "IMPORTER_DEFAULT_IMAGE_BASE": str,
+        "MEDIA_HDF5_SUBDIRECTORY": str,
+        "MEDIA_CROPPING_SUBDIRECTORY": str,
+        "MEDIA_ROI_SUBDIRECTORY": str,
+        "MEDIA_TREENODE_SUBDIRECTORY": str,
         "GENERATED_FILES_MAXIMUM_SIZE": int,
         "USER_REGISTRATION_ALLOWED": bool,
         "NEW_USER_DEFAULT_GROUPS": list,
         "STATIC_EXTENSION_FILES": list,
-        "STATIC_EXTENSION_ROOT": six.string_types,
+        "STATIC_EXTENSION_ROOT": str,
     }
 
     def validate_configuration(self):
         """Make sure CATMAID is configured properly and raise an error if not.
         """
         # Make sure all expected settings are available.
-        for field, data_type in six.iteritems(CATMAIDConfig.required_setting_fields):
+        for field, data_type in CATMAIDConfig.required_setting_fields.items():
             if not hasattr(settings, field):
                 raise ImproperlyConfigured(
                         "Please add the %s settings field" % field)
@@ -187,7 +223,7 @@ class CATMAIDConfig(AppConfig):
             else:
                 allowed_types = (data_type,)
 
-            if not isinstance(getattr(settings, field), allowed_types):
+            if not isinstance(getattr(settings, field), allowed_types): # type: ignore
                 current_type = type(getattr(settings, field))
                 if len(allowed_types) == 1:
                     raise ImproperlyConfigured("Please make sure settings field %s "
@@ -235,6 +271,12 @@ class CATMAIDConfig(AppConfig):
             # This error is raised if the database is not set up when the code
             # above is executed. This can safely be ignored.
             pass
+        except ImproperlyConfigured as e:
+            # Only show this as a warning. To allow this to go through and stop
+            # the initialization requires functionality to till allow the
+            # createsuperuser management command. The superuser in CATMAID is
+            # not needed during initialization.
+            logger.warn(str(e))
 
     def init_classification(self):
         """ Creates a dummy project to store classification graphs in.
@@ -243,7 +285,7 @@ class CATMAIDConfig(AppConfig):
         try:
             Project.objects.get(pk=settings.ONTOLOGY_DUMMY_PROJECT_ID)
         except Project.DoesNotExist:
-            logging.getLogger(__name__).info("Creating ontology dummy project")
+            logger.info("Creating ontology dummy project")
             Project.objects.create(pk=settings.ONTOLOGY_DUMMY_PROJECT_ID,
                 title="Classification dummy project")
 

@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
-import six
 
-from catmaid.control.neuron_annotations import _annotate_entities
-from catmaid.control.neuron_annotations import create_annotation_query
+from datetime import datetime
+
+from catmaid.control.annotation import _annotate_entities
+from catmaid.control.annotation import create_annotation_query
 
 from .common import CatmaidApiTestCase
 
@@ -133,6 +133,18 @@ class AnnotationsApiTests(CatmaidApiTestCase):
             self.assertTrue(a in expected_response)
 
 
+    def test_simple_annotation_list_cache(self):
+        self.fake_authentication()
+
+        # Test cache use
+        response = self.client.get('/%d/annotations/' % (self.test_project_id,),
+                {
+                    'simple': True,
+                    'if_modified_since': datetime.now().isoformat(),
+                })
+        self.assertEqual(response.status_code, 304)
+
+
     def test_annotations_query_targets(self):
         self.fake_authentication()
 
@@ -176,7 +188,7 @@ class AnnotationsApiTests(CatmaidApiTestCase):
              "id": 2389,
              "name": "neuron 2389"}]
         self.assertEqual(parsed_response['totalRecords'], 2)
-        six.assertCountEqual(self, parsed_response['entities'], expected_entities)
+        self.assertCountEqual(parsed_response['entities'], expected_entities)
 
         # Test conjunctive behavior
         response = self.client.post(
@@ -202,7 +214,7 @@ class AnnotationsApiTests(CatmaidApiTestCase):
              "id": 233,
              "name": "branched neuron"}])
         self.assertEqual(parsed_response['totalRecords'], 1)
-        six.assertCountEqual(self, parsed_response['entities'], expected_entities)
+        self.assertCountEqual(parsed_response['entities'], expected_entities)
 
         # Test meta-annotation querying
         response = self.client.post(
@@ -232,7 +244,7 @@ class AnnotationsApiTests(CatmaidApiTestCase):
              "name": "C"}
         ]
         self.assertEqual(parsed_response['totalRecords'], 2)
-        six.assertCountEqual(self, parsed_response['entities'], expected_entities)
+        self.assertCountEqual(parsed_response['entities'], expected_entities)
 
         # Test that an empty request returns everything.
         response = self.client.post(
@@ -255,4 +267,4 @@ class AnnotationsApiTests(CatmaidApiTestCase):
             'name': 'downstream-A'}
         ]
         self.assertEqual(parsed_response['totalRecords'], 1)
-        six.assertCountEqual(self, parsed_response['entities'], expected_entities)
+        self.assertCountEqual(parsed_response['entities'], expected_entities)

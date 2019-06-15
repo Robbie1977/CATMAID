@@ -509,7 +509,7 @@
    */
   var getNodeSet = function(stackViewer) {
     return stackViewer.getLayersOfType(CATMAID.TracingLayer).reduce(function (set, tracingLayer) {
-      return set.addAll(Object.keys(tracingLayer.tracingOverlay.nodes));
+      return set.addAll(tracingLayer.tracingOverlay.nodes.keys());
     }, new Set());
   };
 
@@ -586,7 +586,7 @@
         var panelWindow = new CMWWindow('Mini stack viewer');
         this.panelWindows.push(panelWindow);
         // prevent dragging
-        $(panelWindow.getFrame()).children('.stackInfo_selected').get(0).onmousedown = function () {return true;};
+        $(panelWindow.getFrame()).children('.stackInfo_selected').get(0).onpointerdown = function () {return true;};
         panelWindow.parent = gridWindow;
 
         var panel = panelWindow.getFrame();
@@ -595,11 +595,11 @@
 
         var panelStackViewer = new CATMAID.StackViewer(project, stack, panelWindow);
 
-        var tileLayer =  this.sourceStackViewer.getLayer('TileLayer').constructCopy(
+        var stackLayer = this.sourceStackViewer.getLayer('StackLayer').constructCopy(
           {stackViewer: panelStackViewer, displayName: `Image data (${stack.title})`}
           );
 
-        panelStackViewer.addLayer("TileLayer", tileLayer);
+        panelStackViewer.addLayer("StackLayer", stackLayer);
 
         panelStackViewer.layercontrol.refresh();
         this.stackViewers.push(panelStackViewer);

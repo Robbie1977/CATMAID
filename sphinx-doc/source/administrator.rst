@@ -12,7 +12,12 @@ Administrator Documentation
    permissions
    celery
    websockets
+   tracing-caches
    history_tables
    docker
    userprofiles
+   additional_backends
+   r_setup
+   nblast
    admin_faq
+   catmaid_and_rds

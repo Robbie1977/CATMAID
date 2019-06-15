@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 # Albert Cardona 2014-11-20
 # This file is meant to be run from within ./manage.py shell in the environment, like:
@@ -18,7 +17,6 @@ from __future__ import unicode_literals
 # these directed edges also contain the skeleton ID of the pre- and the postsynaptic
 # skeletons.
 
-from __future__ import with_statement
 from django.db import connection
 from django.db import transaction
 import gzip

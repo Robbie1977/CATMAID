@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 """Specifies static assets (CSS, JS) required by the CATMAID front-end.
 
@@ -19,7 +18,7 @@ dictionary. JavaScript files go into the 'catmaid' entry of the ``JAVASCRIPT``
 dictonary at the end of this file.
 """
 
-from collections import OrderedDict
+from collections import Iterable, OrderedDict
 from importlib import import_module
 
 import six
@@ -27,6 +26,7 @@ import six
 # python module names of CATMAID extensions which could potentially be installed
 KNOWN_EXTENSIONS = (
     'synapsesuggestor',
+    'autoproofreader',
 )
 
 
@@ -93,13 +93,20 @@ libraries_js = OrderedDict([
     ('sylvester', ['sylvester.js']),
     ('msgpack-lite', ['msgpack.min.js']),
     ('numeric', ['numeric-1.2.6.js']),
+    ('numjs', ['numjs.min.js']),
     ('three.js', ['three.js', 'controls/TrackballControls.js',
-                 'camera/CombinedCamera.js', 'Detector.js',
+                 'camera/CombinedCamera.js', 'WebGL.js',
+                 'lines/LineSegmentsGeometry.js', 'lines/LineGeometry.js',
+                 'lines/LineSegments2.js', 'lines/Line2.js',
+                 'lines/LineMaterial.js', 'loaders/VRMLLoader.js',
+                 'lines/Wireframe.js', 'lines.WireframeGeometry2',
                  'loaders/VRMLLoader.js', 'renderer/Projector.js',
-                 'renderer/SVGRenderer.js', 'exporters/OBJExporter.js']),
+                 'renderer/SVGRenderer.js', 'exporters/OBJExporter.js',
+                 'math/Lut.js', 'modifiers/*.js']),
     ('threex', ['*.js']),
     ('plotly', ['*.js']),
     ('pixi.js', ['*.js']),
+    ('pointyjs', ['*.js']),
     ('cytoscapejs', ['cytoscape.js', 'cytoscape-spread.js',
                     'arbor.js', 'cytoscape-arbor.js',
                     'cola.js', 'cytoscape-cola.js',
@@ -107,10 +114,13 @@ libraries_js = OrderedDict([
                     'springy.js', 'cytoscape-springy.js']),
     ('jsnetworkx', ['*.js']),
     ('filesaver', ['*.js']),
-    ('whammy', ['whammy.js']),
+    ('screw-filereader', ['*.js']),
+    ('streamsaver', ['StreamSaver.js', 'polyfill.min.js']),
+    ('webm-writer.js', ['*.js']),
     ('blazy', ['blazy.min.js']),
     ('geometry', ['geometry.js', 'intersects.js']), # order matters
-    ('catmaid', ['request.js', 'CATMAID.js', 'error.js', 'events.js', 'state.js',
+    ('catmaid', ['namespace.js', 'error.js', 'events.js', 'request.js',
+                'tools.js', 'lru-cache.js', 'CATMAID.js', 'state.js',
                 'command.js', 'models/*.js', 'skeleton_source.js',
                 'datastores.js', 'settings-manager.js', '*.js']),
 ])
@@ -133,15 +143,31 @@ non_pipeline_js = {}
 # care of collecting them into the STATIC_ROOT directory.
 for k, v in six.iteritems(non_pipeline_js):
     JAVASCRIPT[k] = {
-        'source_filenames': (v,),
+        'source_filenames': [v],
         'output_filename': v
     }
 
 
+# Like non_pipeline_js, these files aren't compressed. They are however only
+# copied to the output directory and are not supposed to be imported/loaded by
+# the front-end.
+copy_only_files = {
+        'streamsaver-worker-1': 'libs/streamsaver/worker/mitm.html',
+        'streamsaver-worker-2': 'libs/streamsaver/worker/ping.html',
+        'streamsaver-worker-3': 'libs/streamsaver/worker/ping.js',
+        'streamsaver-worker-4': 'libs/streamsaver/worker/sw.js',
+}
+
+# Let pipeline know about copy-only files.
+for k, v in six.iteritems(copy_only_files):
+    JAVASCRIPT[k] = {
+        'source_filenames': [v],
+        'output_filename': v
+    }
+
 # Regular CATMAID front-end files
 JAVASCRIPT['catmaid'] = {
     'source_filenames': (
-        'js/tools.js',
         'js/CATMAID.js',
         'js/dom.js',
         'js/extensions.js',
@@ -153,6 +179,7 @@ JAVASCRIPT['catmaid'] = {
         'js/network-api.js',
         'js/project.js',
         'js/stack.js',
+        'js/reoriented-stack.js',
         'js/stack-viewer.js',
         'js/tile-source.js',
         'js/treelines.js',
@@ -166,14 +193,17 @@ JAVASCRIPT['catmaid'] = {
         'js/tools/navigator.js',
         'js/tools/box-selection-tool.js',
         'js/tools/roi-tool.js',
-        'js/tools/segmentation-tool.js',
         'js/tools/*.js',
+        'js/layers/stack-layer.js',
         'js/layers/tile-layer.js',
         'js/layers/pixi-layer.js',
+        'js/layers/pixi-tile-layer.js',
         'js/layers/*.js',
         'js/widgets/detail-dialog.js',
         'js/widgets/options-dialog.js',
         'js/3d/*.js',
+        'js/image-block.js',
+        'js/label-annotations.js',
         'js/widgets/*.js',
     ),
     'output_filename': 'js/catmaid.js',

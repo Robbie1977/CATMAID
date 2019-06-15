@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 import decimal
 
 from django.db import connection
-from six import string_types
-from six.moves import reduce
+from functools import reduce
 
 
 class StateMatchingError(Exception):
@@ -69,7 +67,7 @@ class StateCheck:
     """A simple wraper arround state check SQL and parameters for it"""
 
     def __init__(self, sql, params):
-        if not isinstance(sql, string_types):
+        if not isinstance(sql, str):
             raise ValueError("No SQL string")
         self.sql = sql
         self.params = params if type(params) in (list, tuple) else (params,)
@@ -120,7 +118,7 @@ def parse_state(state):
     if not state:
         raise ValueError("No state provided")
 
-    if isinstance(state, string_types):
+    if isinstance(state, str):
         state = json.loads(state, parse_float=decimal.Decimal)
 
     def check_ref(name, ref):

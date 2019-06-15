@@ -5,6 +5,27 @@
 
   "use strict";
 
+
+  /**
+   * Information on a single connector node.
+   */
+  var ConnectorModel = function(id, x, y, z, links, confidence, creatorId,
+      editionTime, subtype) {
+    this.id = id;
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.links = links;
+    this.subtype = subtype;
+    this.confidence = confidence;
+    this.creatorId = creatorId;
+    this.editionTime = editionTime;
+    this.subtype = subtype;
+  };
+
+  CATMAID.ConnectorModel = ConnectorModel;
+
+
   /**
    * This namespace provides functions to work with annotations on neurons. All
    * of them return promises.
@@ -22,10 +43,11 @@
      * @param {integer[][]} links  (Optional) A list of two-elment list, each
      *                             representing treenode ID and a relation ID
      *                             based on which new links will be created
+     * @param {string} subtype     (Optional) A subtype specification
      *
      * @returns a promise that is resolved once the connector is created
      */
-    create: function(state, projectId, x, y, z, confidence, links) {
+    create: function(state, projectId, x, y, z, confidence, links, subtype) {
       CATMAID.requirePermission(projectId, 'can_annotate',
           'You don\'t have have permission to create connectors');
       var url = projectId + '/connector/create';
@@ -47,8 +69,11 @@
 
       return CATMAID.fetch(url, 'POST', params)
         .then(function(result) {
+          var newConnector = new CATMAID.ConnectorModel(result.connector_id,
+              x, y, z, links, confidence, CATMAID.session.userid,
+              result.connector_edition_time, subtype);
           CATMAID.Connectors.trigger(CATMAID.Connectors.EVENT_CONNECTOR_CREATED,
-              result.connector_id, x, y, z);
+              newConnector);
           return {
             newConnectorId: result.connector_id,
             newConnectorEditTime: result.connector_edition_time,
@@ -283,7 +308,49 @@
             return types[t];
           });
         });
-    }
+    },
+
+    /**
+     * Get connectors that intersedct with the defined bounding box.
+     *
+     * @param {number}  projectId      Project space to operte in.
+     * @param {numner}  minX           Minimum X coordinate of bounding box.
+     * @param {numner}  minY           Minimum Y coordinate of bounding box.
+     * @param {numner}  minZ           Minimum Z coordinate of bounding box.
+     * @param {numner}  maxX           Maximum X coordinate of bounding box.
+     * @param {numner}  maxY           Maximum Y coordinate of bounding box.
+     * @param {numner}  maxZ           Maximum Z coordinate of bounding box.
+     * @param {numner}  limit          (optional) Maximum number of connectors
+     *                                 to return or 0 to disable. Default is 0.
+     * @param {boolean} with_locations (optional) Whether to also return the
+     *                                 location of each connector. Default is
+     *                                 false.
+     * @param {boolean} with_links     (optional) Whether all matched partner
+     *                                 link information should be returned.
+     *                                 Default is false.
+     * @param {number[]} skeletonIds   (optional) A list of skeleton IDs to
+     *                                 which returned connectors need to be
+     *                                 connected.
+     *
+     * @returns {Promise} Resolves with a list of intersecting skeleton Ids (or
+     *                    more info if requested)..
+     */
+    inBoundingBox: function(projectId, minX, minY, minZ, maxX, maxY, maxZ,
+        limit, with_locations, with_links, skeletonIds) {
+      let method = skeletonIds ? 'POST' : 'GET';
+      return CATMAID.fetch(project.id + '/connectors/in-bounding-box', method, {
+        'minx': minX,
+        'miny': minY,
+        'minz': minZ,
+        'maxx': maxX,
+        'maxy': maxY,
+        'maxz': maxZ,
+        'limit': limit,
+        'with_locations': with_locations,
+        'with_links': with_links,
+        'skeleton_ids': skeletonIds,
+      });
+    },
   };
 
   // Keeps a copy of the available connector types
@@ -299,6 +366,8 @@
   Connectors.SUBTYPE_SYNAPTIC_CONNECTOR = "synaptic-connector";
   Connectors.SUBTYPE_ABUTTING_CONNECTOR = "abutting-connector";
   Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR = "gapjunction-connector";
+  Connectors.SUBTYPE_TIGHTJUNCTION_CONNECTOR = "tightjunction-connector";
+  Connectors.SUBTYPE_DESMOSOME_CONNECTOR = "desmosome-connector";
   Connectors.SUBTYPE_ATTACHMENT_CONNECTOR = "attachment-connector";
 
   Connectors.relationToSubtype = function(relationName) {
@@ -312,6 +381,10 @@
       return Connectors.SUBTYPE_ATTACHMENT_CONNECTOR;
     } else if ('close_to' === relationName) {
       return Connectors.SUBTYPE_ATTACHMENT_CONNECTOR;
+    } else if ('tightjunction_with' === relationName) {
+      return Connectors.SUBTYPE_TIGHTJUNCTION_CONNECTOR;
+    } else if ('desmosome_with' === relationName) {
+      return Connectors.SUBTYPE_DESMOSOME_CONNECTOR;
     } else {
       throw new CATMAID.ValueError('Unknown connector link relation: ' + relationName);
     }
@@ -329,10 +402,11 @@
    * @param {integer} y          The Y coordinate of the connector's location
    * @param {integer} z          The Z coordinate of the connector's location
    * @param {integer} confidence (Optional) confidence in range 1-5
+   * @param {integer} subtype    (Optional) A connector subtype
    *
    */
   CATMAID.CreateConnectorCommand = CATMAID.makeCommand(
-      function(projectId, x, y, z, confidence) {
+      function(projectId, x, y, z, confidence, subtype) {
 
     // First execution will set the original connector node that all mappings
     // will refer to.
@@ -341,7 +415,8 @@
     var exec = function(done, command, map) {
       // For a regular connector creation, no state is required
       var execState = null;
-      var create = CATMAID.Connectors.create(execState, projectId, x, y, z, confidence);
+      var create = CATMAID.Connectors.create(execState, projectId, x, y, z,
+          confidence, undefined, subtype);
       return create.then(function(result) {
         // First execution will remember the added node for redo mapping
         if (!umConnectorId) {

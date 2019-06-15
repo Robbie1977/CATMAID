@@ -5,86 +5,17 @@
   "use strict";
 
   /**
-   * Displays a grid of tiles from an image stack.
+   * Displays a grid of tiles from an image stack using the DOM.
+   *
+   * See CATMAID.StackLayer for parameters.
+   *
+   * @class TileLayer
+   * @extends StackLayer
    * @constructor
-   * @param {StackViewer} stackViewer Stack viewer to which this layer belongs.
-   * @param {string}  displayname  Name displayed in window controls.
-   * @param {Stack}   stack        Image stack from which to draw tiles.
-   * @param {number}  mirrorIndex  Stack mirror index to use as tile source. If
-   *                               undefined, the fist available mirror is used.
-   * @param {boolean} visibility   Whether the tile layer is initially visible.
-   * @param {number}  opacity      Opacity to draw the layer.
-   * @param {boolean} showOverview Whether to show a "minimap" overview of the
-   *                               stack.
-   * @param {boolean} linearInterpolation Whether to use linear or nearest
-   *                               neighbor tile texture interpolation.
-   * @param {boolean} readState    Whether last used mirror and custom mirrors
-   *                               should be read from a browser cookie.
-   * @param {boolean} changeMirrorIfNoData Whether to automatically switch to
-   *                               the next accessible mirror if the present one
-   *                               in inaccessible. (Default: true)
    */
-  function TileLayer(
-      stackViewer,
-      displayname,
-      stack,
-      mirrorIndex,
-      visibility,
-      opacity,
-      showOverview,
-      linearInterpolation,
-      readState,
-      changeMirrorIfNoData) {
-    this.stackViewer = stackViewer;
-    this.displayname = displayname;
-    this.stack = stack;
-    this.opacity = opacity; // in the range [0,1]
-    this.visible = visibility;
-    this.isOrderable = true;
-    this.isHideable = false;
-    this.lastMirrorStorageName = 'catmaid-last-mirror-' +
-        project.id + '-' + stack.id;
-    this.customMirrorStorageName = 'catmaid-custom-mirror-' +
-        project.id + '-' + stack.id;
+  function TileLayer() {
 
-    if (readState) {
-      var serializedCustomMirrorData = readStateItem(this.customMirrorStorageName);
-      if (serializedCustomMirrorData) {
-        var customMirrorData = JSON.parse(serializedCustomMirrorData);
-        stack.addMirror(customMirrorData);
-      }
-
-      // If no mirror index is given, try to read the last used value from a
-      // cookie. If this is unavailable, use the first mirror as default.
-      if (undefined === mirrorIndex) {
-        var lastUsedMirror = readStateItem(this.lastMirrorStorageName);
-        if (lastUsedMirror) {
-          mirrorIndex = parseInt(lastUsedMirror, 10);
-
-          if (mirrorIndex >= this.stack.mirrors.length) {
-            localStorage.removeItem(this.lastMirrorStorageName);
-            mirrorIndex = undefined;
-          }
-        }
-      }
-    }
-    this._readState = readState;
-
-    this.mirrorIndex = mirrorIndex || 0;
-    this.tileSource = stack.createTileSourceForMirror(this.mirrorIndex);
-
-    /* Whether mirros should be changed automatically if image data is
-     * unavailable.
-     */
-    this.changeMirrorIfNoData = CATMAID.tools.getDefined(changeMirrorIfNoData, true);
-
-    /**
-     * Whether to hide this tile layer if the nearest section is marked as
-     * broken, rather than the default behavior of displaying the nearest
-     * non-broken section.
-     * @type {Boolean}
-     */
-    this.hideIfNearestSliceBroken = CATMAID.TileLayer.Settings.session.hide_if_nearest_section_broken;
+    CATMAID.StackLayer.apply(this, arguments);
 
     /**
      * Omit tiles with less area than this threshold visible.
@@ -121,18 +52,14 @@
     this._buffering = false;
     this._swapBuffersTimeout = null;
 
+    this.tileWidth = this.tileSource.tileWidth;
+    this.tileHeight = this.tileSource.tileHeight;
+
     this.tilesContainer = document.createElement('div');
     this.tilesContainer.className = 'sliceTiles';
+    this.tilesContainer.classList.add('interpolation-mode-' + this.getEffectiveInterpolationMode());
 
-    /**
-     * True to use linear tile texture interpolation, false to use nearest
-     * neighbor.
-     * @type {boolean}
-     */
-    this._interpolationMode = linearInterpolation;
-    this.tilesContainer.classList.add('interpolation-mode-' + (this._interpolationMode ? 'linear' : 'nearest'));
-
-    if (this.tileSource.transposeTiles.has(stack.orientation)) {
+    if (this.tileSource.transposeTiles.has(this.stack.orientation)) {
       // Some tile sources may provide transposed tiles versus CATMAID's
       // expectation, e.g., YZ tiles for a ZY oriented stack. In these cases
       // the tile layer is responsible for transposing them back to CATMAID's
@@ -141,9 +68,9 @@
       this._transpose = true;
     }
 
-    stackViewer.getLayersView().appendChild(this.tilesContainer);
+    this.stackViewer.getLayersView().appendChild(this.tilesContainer);
 
-    if (showOverview) {
+    if (this.showOverview) {
       // Initialize the OverviewLayer on the bottom-right with the correct
       // path to the small thumbnail images depending on the tile source type
       // This is only run for the TileLayer which usually holds the primary
@@ -151,79 +78,18 @@
       // currently not shown with a small image.
       this.overviewLayer = this.tileSource.getOverviewLayer(this);
     }
-
-    CATMAID.checkTileSourceCanary(project, this.stack, this.tileSource)
-        .then(this._handleCanaryCheck.bind(this));
   }
 
-  var readStateItem = function(key) {
-    var item = localStorage.getItem(key);
-    if (!item) {
-    // Try to load custom mirror from cookie if no local storage information
-    // is found. This is removed in a future release and is only meant to not
-    // cause surprising defaults after an update.
-      item = CATMAID.getCookie(key);
-      if (item) {
-        localStorage.setItem(key, item);
-        // Remove old cookie entry
-        CATMAID.setCookie(key, '', -1);
-      }
+  TileLayer.prototype = Object.create(CATMAID.StackLayer.prototype);
+  TileLayer.prototype.constructor = TileLayer;
+
+  /** @inheritdoc */
+  TileLayer.prototype.setInterpolationMode = function (mode) {
+    CATMAID.StackLayer.prototype.setInterpolationMode.call(this, mode);
+    for (let possible of Object.values(CATMAID.StackLayer.INTERPOLATION_MODES)) {
+      this.tilesContainer.classList.remove('interpolation-mode-' + possible);
     }
-    return item;
-  };
-
-  /**
-   * Handle a canary tile check for the tile source mirror.
-   *
-   * If the mirror is not accessible, switch to the first accessible mirror
-   * (ordered by mirror preference position). Otherwise, warn that no
-   * accessible mirror is available.
-   *
-   * @param  {Object} accessible Check result with normal and cors booleans.
-   */
-  TileLayer.prototype._handleCanaryCheck = function (accessible) {
-    if (!accessible.normal && this.changeMirrorIfNoData) {
-      Promise
-          .all(this.stack.mirrors.map(function (mirror, index) {
-            return CATMAID.checkTileSourceCanary(
-                project,
-                this.stack,
-                this.stack.createTileSourceForMirror(index));
-          }, this))
-          .then((function (mirrorAccessible) {
-            var mirrorIndex = mirrorAccessible.findIndex(function (accessible) {
-              return accessible.normal;
-            });
-
-            if (mirrorIndex !== -1) {
-              var oldMirrorTitle = this.stack.mirrors[this.mirrorIndex].title;
-              var newMirrorTitle = this.stack.mirrors[mirrorIndex].title;
-              CATMAID.warn('Stack mirror "' + oldMirrorTitle + '" is inaccessible. ' +
-                           'Switching to mirror "' + newMirrorTitle + '".');
-              this.switchToMirror(mirrorIndex);
-            } else {
-              CATMAID.warn('No mirrors for this stack are accessible. Image data may not load.');
-            }
-          }).bind(this));
-    }
-  };
-
-  /**
-   * Sets the interpolation mode for tile textures to linear pixel interpolation
-   * or nearest neighbor.
-   * @param {boolean} linear True for linear, false for nearest neighbor.
-   */
-  TileLayer.prototype.setInterpolationMode = function (linear) {
-    this.tilesContainer.classList.remove('interpolation-mode-' + (this._interpolationMode ? 'linear' : 'nearest'));
-    this._interpolationMode = linear;
-    this.tilesContainer.classList.add('interpolation-mode-' + (this._interpolationMode ? 'linear' : 'nearest'));
-  };
-
-  /**
-   * Return friendly name of this layer.
-   */
-  TileLayer.prototype.getLayerName = function () {
-    return this.displayname;
+    this.tilesContainer.classList.add('interpolation-mode-' + this.getEffectiveInterpolationMode());
   };
 
   /**
@@ -299,6 +165,11 @@
         scaledStackPosition.s,
         this.efficiencyThreshold);
 
+    if (this._anisotropy.x !== tileInfo.anisotropy.x ||
+        this._anisotropy.y !== tileInfo.anisotropy.y) {
+      return this.resize(this.stackViewer.viewWidth, this.stackViewer.viewHeight, completionCallback, blocking);
+    }
+
     // By default all needed tiles are shown. This can be changed so that all
     // tiles are hidden, e.g. if the current location is on a broken slice and
     // CATMAID is configured to hide these sections.
@@ -317,8 +188,8 @@
       }
     }
 
-    var effectiveTileWidth = this.tileSource.tileWidth * tileInfo.mag * this.stack.anisotropy.x;
-    var effectiveTileHeight = this.tileSource.tileHeight * tileInfo.mag * this.stack.anisotropy.y;
+    var effectiveTileWidth = this.tileWidth * tileInfo.mag * tileInfo.anisotropy.x;
+    var effectiveTileHeight = this.tileHeight * tileInfo.mag * tileInfo.anisotropy.y;
 
     var rows = this._tiles.length, cols = this._tiles[0].length;
 
@@ -397,6 +268,10 @@
     var nextL, nextT, seamRow;
     var slicePixelPosition = [tileInfo.z];
 
+    // Clamping to zero can be disable in the stack.
+    let clamp = this.stack.clamp;
+    let [minCol, minRow] = clamp ? [0, 0] : [tileInfo.firstCol, tileInfo.firstRow];
+
     // Update tiles (or the tile buffer).
     for (var i = this._tileOrigR, ti = 0; ti < rows; ++ti, i = (i+1) % rows) {
       var r = tileInfo.firstRow + ti;
@@ -410,8 +285,8 @@
 
         nextL = l + effectiveTileWidth;
 
-        if (c >= 0 && c <= tileInfo.lastCol &&
-            r >= 0 && r <= tileInfo.lastRow && showTiles) {
+        if (c >= minCol && c <= tileInfo.lastCol &&
+            r >= minRow && r <= tileInfo.lastRow && showTiles) {
           var source = this.tileSource.getTileURL(project, this.stack, slicePixelPosition,
               c, r, tileInfo.zoom);
 
@@ -521,12 +396,13 @@
    * @param  {number} width  Width of the view in pixels.
    * @param  {number} height Height of the view in pixels.
    */
-  TileLayer.prototype.resize = function (width, height) {
-    var cols = Math.ceil(width / this.tileSource.tileWidth / this.stack.anisotropy.x) + 1;
-    var rows = Math.ceil(height / this.tileSource.tileHeight / this.stack.anisotropy.y) + 1;
+  TileLayer.prototype.resize = function (width, height, completionCallback, blocking) {
+    this._anisotropy = this.stack.anisotropy(Math.ceil(this.stackViewer.s));
+    var cols = Math.ceil(width / this.tileWidth / this._anisotropy.x) + 1;
+    var rows = Math.ceil(height / this.tileHeight / this._anisotropy.y) + 1;
     if (this._tiles.length === 0 || this._tiles.length !== rows || this._tiles[0].length !== cols)
       this._initTiles(rows, cols);
-    this.redraw();
+    this.redraw(completionCallback, blocking);
   };
 
   /**
@@ -621,13 +497,12 @@
     if (typeof efficiencyThreshold === 'undefined') efficiencyThreshold = 0.0;
     var zoom = s;
     var mag = 1.0;
-    var artificialZoom = false;
+
     /* If the zoom is negative we zoom in digitally. For this
      * we take the zero zoom level and adjust the tile properties.
      * This way we let the browser do the zooming work.
      */
     if (zoom < 0 || zoom % 1 !== 0) {
-      artificialZoom = true;
       /* For nonintegral zoom levels the ceiling is used to select
        * source image zoom level. While using the floor would allow
        * better image quality, it would requiring dynamically
@@ -639,11 +514,16 @@
        * resolution and negative for non-integral zooms within
        * image resolution.
        */
-      mag = Math.pow(2, zoom - s);
+      if (s < 0 || zoom === this.stack.MAX_S) {
+        mag = Math.pow(2, zoom - s);
+      } else {
+        mag = this.stack.effectiveDownsampleFactor(zoom) / this.stack.effectiveDownsampleFactor(s);
+      }
     }
 
-    var effectiveTileWidth = this.tileSource.tileWidth * mag * this.stack.anisotropy.x;
-    var effectiveTileHeight = this.tileSource.tileHeight * mag * this.stack.anisotropy.y;
+    var anisotropy = this.stack.anisotropy(zoom);
+    var effectiveTileWidth = this.tileWidth * mag * anisotropy.x;
+    var effectiveTileHeight = this.tileHeight * mag * anisotropy.y;
 
     var fr = Math.floor(yc / effectiveTileHeight);
     var fc = Math.floor(xc / effectiveTileWidth);
@@ -654,11 +534,11 @@
     if (yc >= 0)
       top  = -(yc % effectiveTileHeight);
     else
-      top  = -((yc + 1) % effectiveTileHeight) - effectiveTileHeight + 1;
+      top  = (-(yc % effectiveTileHeight) - effectiveTileHeight) % effectiveTileHeight;
     if (xc >= 0)
       left = -(xc % effectiveTileWidth);
     else
-      left = -((xc + 1) % effectiveTileWidth) - effectiveTileWidth + 1;
+      left = (-(xc % effectiveTileWidth) - effectiveTileWidth) % effectiveTileWidth;
 
     // Efficient mode: omit tiles at the periphery that are only partially
     // visible.
@@ -692,8 +572,10 @@
     lr = Math.floor((yc + this.stackViewer.viewHeight - efficiencyThreshold * effectiveTileHeight) / effectiveTileHeight);
 
     // Clamp last tile coordinates within the slice edges.
-    lc = Math.min(lc, Math.floor((this.stack.dimension.x * Math.pow(2, -zoom) - 1) / this.tileSource.tileWidth));
-    lr = Math.min(lr, Math.floor((this.stack.dimension.y * Math.pow(2, -zoom) - 1) / this.tileSource.tileHeight));
+    lc = Math.min(lc, Math.floor((this.stack.dimension.x / this.stack.downsample_factors[zoom].x - 1)
+                      / this.tileWidth));
+    lr = Math.min(lr, Math.floor((this.stack.dimension.y / this.stack.downsample_factors[zoom].y - 1)
+                      / this.tileHeight));
 
     return {
       firstRow:  fr,
@@ -702,111 +584,11 @@
       lastCol:   lc,
       top:       top,
       left:      left,
-      z:         z,
+      z:         Math.floor(z / this.stack.downsample_factors[zoom].z),
       zoom:      zoom,
-      mag:       mag
+      mag:       mag,
+      anisotropy: anisotropy
     };
-  };
-
-  /**
-   * Show a dialog that give a user the option to configure a custom mirror.
-   */
-  TileLayer.prototype.addCustomMirror = function () {
-    // Get some default values from the current tile source
-    var mirror = this.stack.mirrors[this.mirrorIndex];
-    var dialog = new CATMAID.OptionsDialog('Add custom mirror');
-    dialog.appendMessage("Please specify at least a URL for the custom mirror");
-    var url = dialog.appendField("URL", "customMirrorURL", "", false);
-    var title = dialog.appendField("Title", "customMirrorTitle", "Custom mirror", false);
-    var ext = dialog.appendField("File extension", "customMirrorExt",
-        mirror.file_extension, false);
-    var tileWidth = dialog.appendField("Tile width", "customMirrorTileWidth",
-        mirror.tile_width, false);
-    var tileHeight = dialog.appendField("Tile height", "customMirrorTileHeight",
-        mirror.tile_height, false);
-    var tileSrcType = dialog.appendField("Tile source type",
-        "customMirrorTileSrcType", mirror.tile_source_type, false);
-    var changeMirrorIfNoDataCb = dialog.appendCheckbox("Change mirror on inaccessible data",
-        "change-mirror-if-no-data", false, "If this is selected, a different mirror is " +
-        "selected automatically, if the custom mirror is unreachable");
-
-    var messageContainer = dialog.appendHTML("Depending of the configuration " +
-      "this mirror, you maybe have to add a SSL certificate exception. To do this, " +
-      "click <a href=\"#\">here</a> after the information above is complete. " +
-      "A new page will open, displaying either an image or a SSL warning. In " +
-      "case of the warning, add a security exception for this (and only this) " +
-      "certificate. Only after having this done and the link shows an image, " +
-      "click OK below.");
-
-    var getMirrorData = function() {
-      var imageBase = url.value;
-      if (!imageBase.endsWith('/')) {
-        imageBase = imageBase + '/';
-      }
-      return {
-        id: "custom",
-        title: title.value,
-        position: -1,
-        image_base: imageBase,
-        file_extension: ext.value,
-        tile_width: parseInt(tileWidth.value, 10),
-        tile_height: parseInt(tileHeight.value, 10),
-        tile_source_type: parseInt(tileSrcType.value, 10)
-      };
-    };
-
-    var openCanaryLink = messageContainer.querySelector('a');
-    var stack = this.stack;
-    openCanaryLink.onclick = function() {
-      var customMirrorData = getMirrorData();
-      var tileSource = CATMAID.getTileSource(
-          customMirrorData.tile_source_type,
-          customMirrorData.image_base,
-          customMirrorData.file_extension,
-          customMirrorData.tile_width,
-          customMirrorData.tile_height);
-      var url = CATMAID.getTileSourceCanaryUrl(project, stack, tileSource);
-      // Open a new browser window with a canary tile
-      var win = window.open(url);
-    };
-
-    var self = this;
-    dialog.onOK = function() {
-      self.changeMirrorIfNoData = changeMirrorIfNoDataCb.checked;
-      var customMirrorData = getMirrorData();
-      var newMirrorIndex = self.stack.addMirror(customMirrorData);
-      self.switchToMirror(newMirrorIndex);
-      localStorage.setItem(self.customMirrorStorageName,
-          JSON.stringify(customMirrorData));
-
-      // Update layer control UI to reflect settings changes.
-      if (self.stackViewer && self.stackViewer.layerControl) {
-        self.layerControl.refresh();
-      }
-    };
-
-    dialog.show(500, 'auto');
-  };
-
-  TileLayer.prototype.clearCustomMirrors = function () {
-    var customMirrorIndices = this.stack.mirrors.reduce(function(o, m, i, mirrors) {
-      if (mirrors[i].id === 'custom') {
-        o.push(i);
-      }
-      return o;
-    }, []);
-    var customMirrorUsed = customMirrorIndices.indexOf(this.mirrorIndex) != -1;
-    if (customMirrorUsed) {
-      CATMAID.warn("Please select another mirror first");
-      return;
-    }
-    customMirrorIndices.sort().reverse().forEach(function(ci) {
-      this.stack.removeMirror(ci);
-    }, this);
-    localStorage.removeItem(this.customMirrorStorageName);
-    this.switchToMirror(this.mirrorIndex, true);
-
-    CATMAID.msg("Done", "Custom mirrors cleared");
   };
 
   /**
@@ -814,23 +596,11 @@
    * anything if the tile layer's tile source provides additional settings.
    */
   TileLayer.prototype.getLayerSettings = function () {
-    var settings = [{
-        name: 'hideIfBroken',
-        displayName: 'Hide if nearest slice is broken',
-        type: 'checkbox',
-        value: this.hideIfNearestSliceBroken,
-        help: 'Hide this tile layer if the nearest section is marked as ' +
-              'broken, rather than the default behavior of displaying the ' +
-              'nearest non-broken section.'
-    },{
-        name: 'changeMirrorIfNoData',
-        displayName: 'Change mirror on inaccessible data',
-        type: 'checkbox',
-        value: this.changeMirrorIfNoData,
-        help: 'Automatically switch to the next accessible mirror if ' +
-              'the current mirror is inaccessible. This is usually recomended ' +
-              'except for some use cases involving custom mirrors.'
-    },{
+    var settings = CATMAID.StackLayer.prototype.getLayerSettings.call(this);
+    settings.splice(
+      settings.findIndex(s => s.name === 'stackInfo'),
+      undefined,
+      {
         name: 'webGL',
         displayName: 'Use WebGL',
         type: 'checkbox',
@@ -845,33 +615,7 @@
         value: this.efficiencyThreshold,
         help: 'Omit tiles with less area visible than this threshold. This ' +
               'is useful to reduce data use on bandwidth-limited connections.'
-    },{
-      name: 'mirrorSelection',
-      displayName: 'Stack mirror',
-      type: 'select',
-      value: this.mirrorIndex,
-      options: this.stack.mirrors.map(function (mirror, idx) {
-        return [idx, mirror.title];
-      }),
-      help: 'Select from which image host to request image data for this stack.'
-    }, {
-      name: 'customMirrors',
-      displayName: 'Custom mirrors',
-      type: 'buttons',
-      buttons: [
-        {
-          name: 'Add',
-          onclick: this.addCustomMirror.bind(this)
-        },
-        {
-          name: 'Clear',
-          onclick: this.clearCustomMirrors.bind(this)
-        }]
-    }];
-
-    if (this.tileSource) {
-      settings = settings.concat(this.tileSource.getSettings());
-    }
+    });
 
     return settings;
   };
@@ -881,21 +625,9 @@
    * the layer's tile source accepts setting changes.
    */
   TileLayer.prototype.setLayerSetting = function(name, value) {
-    if ('hideIfBroken' === name) {
-      this.hideIfNearestSliceBroken = value;
-      if (!this.hideIfNearestSliceBroken) this.setOpacity(this.opacity);
-    } else if ('efficiencyThreshold' === name) {
+    if ('efficiencyThreshold' === name) {
       this.efficiencyThreshold = value;
       this.redraw();
-    } else if ('mirrorSelection' === name) {
-      this.switchToMirror(value);
-    } else if ('changeMirrorIfNoData' === name) {
-      this.changeMirrorIfNoData = value;
-      // If this was set to true, perform a canary test
-      if (this.changeMirrorIfNoData) {
-        CATMAID.checkTileSourceCanary(project, this.stack, this.tileSource)
-            .then(this._handleCanaryCheck.bind(this));
-      }
     } else if ('webGL' === name) {
       if (value) {
         if (!(this instanceof CATMAID.PixiTileLayer)) {
@@ -908,79 +640,16 @@
           this.switchToDomTileLayer();
         }
       }
-    } else if (this.tileSource && CATMAID.tools.isFn(this.tileSource.setSetting)) {
-      return this.tileSource.setSetting(name, value);
+    } else {
+      CATMAID.StackLayer.prototype.setLayerSetting.call(this, name, value);
     }
   };
-
-  /**
-   * Get the stack.
-   */
-  TileLayer.prototype.getStack = function () { return this.stack; };
-
-  /**
-   * Get the stack viewer.
-   */
-  TileLayer.prototype.getStackViewer = function () { return this.stackViewer; };
 
   /**
    * Get the DOM element view for this layer.
    * @return {Element} View for this layer.
    */
   TileLayer.prototype.getView = function () { return this.tilesContainer; };
-
-  /**
-   * Create a new tile layer with the same parameters as this tile layer.
-   *
-   * @param  {Object}    override    Constructor arguments to override.
-   * @param  {function=} constructor Optional PixiLayer subclass constructor.
-   * @return {PixiLayer}             Newly constructed PixiLayer subclass.
-   */
-  TileLayer.prototype.constructCopy = function (override, constructor) {
-    if (typeof constructor === 'undefined') constructor = this.constructor;
-    var args = {
-      stackViewer: this.stackViewer,
-      displayName: this.displayName,
-      stack: this.stack,
-      mirrorIndex: this.mirrorIndex,
-      visibility: this.visibility,
-      opacity: this.opacity,
-      showOverview: !!this.overviewLayer,
-      linearInterpolation: this._interpolationMode,
-      readState: this._readState,
-      changeMirrorIfNoData: this.changeMirrorIfNoData
-    };
-    $.extend(args, override);
-    return new constructor(
-        args.stackViewer,
-        args.displayName,
-        args.stack,
-        args.mirrorIndex,
-        args.visibility,
-        args.opacity,
-        args.showOverview,
-        args.linearInterpolation,
-        args.readState,
-        args.changeMirrorIfNoData);
-  };
-
-  /**
-   * Switch to a mirror by replacing this tile layer in the stack viewer
-   * with a new one for the specified mirror index.
-   *
-   * @param  {number}  mirrorIdx Index of a mirror in the stack's mirror array.
-   * @param  {boolean} force     If true, the layer will also be refreshed if
-   *                             the mirror didn't change.
-   */
-  TileLayer.prototype.switchToMirror = function (mirrorIndex, force) {
-    if (mirrorIndex === this.mirrorIndex && !force) return;
-    var newTileLayer = this.constructCopy({mirrorIndex: mirrorIndex});
-    var layerKey = this.stackViewer.getLayerKey(this);
-    this.stackViewer.replaceStackLayer(layerKey, newTileLayer);
-
-    // Store last used mirror information in cookie
-    localStorage.setItem(this.lastMirrorStorageName, mirrorIndex);
-  };
 
   /**
    * Set opacity in the range from 0 to 1.
@@ -1000,30 +669,61 @@
     }
   };
 
-  /**
-   * Get the layer opacity.
-   */
-  TileLayer.prototype.getOpacity = function () {
-    return this.opacity;
+  /** @inheritdoc */
+  TileLayer.prototype.pixelValueInScaleLevel = function (stackX, stackY, stackZ) {
+    // If buffering, do not know if any loaded value is valid.
+    if (null !== this._swapBuffersTimeout) return Promise.resolve();
+
+    var scaledStackPosition = this.stackViewer.scaledPositionInStack(this.stack);
+    var tileInfo = this.tilesForLocation(
+        scaledStackPosition.xc,
+        scaledStackPosition.yc,
+        scaledStackPosition.z,
+        scaledStackPosition.s,
+        this.efficiencyThreshold);
+    var stackViewBox = this.stackViewer.createStackViewBox();
+
+    var relX = (stackX - stackViewBox.min.x) / (stackViewBox.max.x - stackViewBox.min.x),
+        relY = (stackY - stackViewBox.min.y) / (stackViewBox.max.y - stackViewBox.min.y);
+
+    if (relX < 0 || relX >= 1 ||
+        relY < 0 || relY >= 1 ||
+        stackZ !== scaledStackPosition.z) {
+      return Promise.resolve();
+    }
+
+    var scaledX = relX * this.stackViewer.viewWidth + scaledStackPosition.xc;
+    var scaledY = relY * this.stackViewer.viewHeight + scaledStackPosition.yc;
+
+    let pixelTileInfo = this.tilesForLocation(
+        scaledX,
+        scaledY,
+        scaledStackPosition.z,
+        scaledStackPosition.s,
+        0.0);
+
+    if (pixelTileInfo.top > 0 || pixelTileInfo.left > 0) return Promise.resolve();
+
+    let xd = this.colTransform(pixelTileInfo.firstCol - this._tileFirstC);
+    let yd = this.rowTransform(pixelTileInfo.firstRow - this._tileFirstR);
+
+    return this._tilePixel(
+        this._tiles[yd][xd],
+        -pixelTileInfo.left / (pixelTileInfo.mag * pixelTileInfo.anisotropy.x),
+        -pixelTileInfo.top / (pixelTileInfo.mag * pixelTileInfo.anisotropy.y));
   };
 
-  TileLayer.Settings = new CATMAID.Settings(
-      'tile-layer',
-      {
-        version: 0,
-        entries: {
-          prefer_webgl: {
-            default: false
-          },
-          linear_interpolation: {
-            default: true
-          },
-          hide_if_nearest_section_broken: {
-            default: false
-          }
-        },
-        migrations: {}
-      });
+  /**
+   * Get a pixel value from a tile.
+   */
+  TileLayer.prototype._tilePixel = function (tile, x, y) {
+    var img = tile;
+    var canvas = document.createElement('canvas');
+    var context = canvas.getContext('2d');
+    context.drawImage(img, 0, 0);
+
+    return Promise.resolve(context.getImageData(x, y, 1, 1).data);
+  };
 
   CATMAID.TileLayer = TileLayer;
 

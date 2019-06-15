@@ -180,7 +180,7 @@
 
     }).bind(this);
 
-    od.show(300, 400, true);
+    od.show(400, 400, true);
   };
 
   AnalyzeArbor.prototype.destroy = function() {
@@ -277,7 +277,7 @@
     CATMAID.NeuronNameService.getInstance().registerAll(this, models, (function() {
       fetchSkeletons(
           skids,
-          function(skid) { return django_url + project.id + '/' + skid + '/1/1/1/compact-arbor-with-minutes'; },
+          function(skid) { return CATMAID.makeURL(project.id + '/' + skid + '/1/1/1/compact-arbor-with-minutes'); },
           function(skid) { return {}; },
           this.appendOne.bind(this),
           function(skid) { CATMAID.msg("ERROR", "Failed to load skeleton #" + skid); },

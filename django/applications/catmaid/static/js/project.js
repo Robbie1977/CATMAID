@@ -92,6 +92,7 @@
 
       // Announce that a new stack view was added
       this.trigger(Project.EVENT_STACKVIEW_ADDED, stackViewer);
+      Project.trigger(Project.EVENT_STACKVIEW_ADDED, stackViewer);
     };
 
     /**
@@ -137,6 +138,7 @@
           // Announce that this stack view was closed. Do this before
           // potentially destroying the project.
           this.trigger(Project.EVENT_STACKVIEW_CLOSED, removedViews[0]);
+          Project.trigger(Project.EVENT_STACKVIEW_CLOSED, removedViews[0]);
 
           if ( stackViewers.length === 0 )
             self.destroy();
@@ -155,6 +157,7 @@
       if ( tool )
         self.focusedStackViewer.setTool( tool );
       this.trigger(Project.EVENT_STACKVIEW_FOCUS_CHANGED, stackViewer);
+      Project.trigger(Project.EVENT_STACKVIEW_FOCUS_CHANGED, stackViewer);
     };
 
     /**
@@ -176,26 +179,16 @@
       'table_treenode': {},
       'selectedneuron': null,
       'selectedskeleton': null,
-          'selectedassembly': null
     };
 
     this.setSelectObject = function( type, id ) {
         this.selectedObjects.selectedneuron = null;
         this.selectedObjects.selectedskeleton = null;
-        this.selectedObjects.selectedassembly = null;
         if( type == "neuron" ) {
             this.selectedObjects.selectedneuron = id;
         } else if( type == "skeleton" ) {
             this.selectedObjects.selectedskeleton = id;
-        } else if( type == "assembly" ) {
-            this.selectedObjects.selectedassembly = id;
         }
-        // if the segmentation tool is select, we need to update
-        // the assembly id
-        if( self.getTool().toolname === 'segmentationtool' ) {
-            SegmentationAnnotations.set_current_assembly_id( this.selectedObjects.selectedassembly );
-        }
-
     };
 
     this.hideToolbars = function() {
@@ -205,7 +198,6 @@
     };
 
     this.hideToolboxes = function() {
-      document.getElementById( "toolbox_segmentation" ).style.display = "none";
       document.getElementById( "toolbox_data" ).style.display = "none";
     };
 
@@ -243,11 +235,15 @@
           }
           window.onresize();
           WindowMaker.setKeyShortcuts();
+          self.trigger(Project.EVENT_TOOL_CHANGED, tool);
+          Project.trigger(Project.EVENT_TOOL_CHANGED, tool);
         })
         .catch(function(error) {
           if (initError) {
             // Unselect all tools on initialization errors
             self.setTool(null);
+            self.trigger(Project.EVENT_TOOL_CHANGED, null);
+            Project.trigger(Project.EVENT_TOOL_CHANGED, null);
           }
           CATMAID.handleError(error);
         });
@@ -283,8 +279,8 @@
      */
     this.register = function() {
       document.getElementById("toolbox_edit").style.display = "block";
-      document.getElementById( "content" ).style.display = "none";
-      document.body.appendChild( view );
+      document.getElementById("content").style.display = "none";
+      document.getElementById("windows").appendChild(view);
     };
 
     /**
@@ -301,23 +297,25 @@
 
       try
       {
-        document.body.removeChild( view );
+        document.getElementById("windows").removeChild( view );
       }
       catch ( error ) {}
       self.id = 0;
       document.getElementById( "content" ).style.display = "block";
       document.getElementById( "stackmenu_box" ).style.display = "none";
+      document.getElementById( "layoutmenu_box" ).style.display = "none";
       document.getElementById( "stack_menu" ).style.display = "none";
       // TODO: bars should be unset by tool on unregister
       document.getElementById("toolbox_edit").style.display = "none";
       document.getElementById("toolbox_data").style.display = "none";
-      document.getElementById("toolbox_segmentation").style.display = "none";
       document.getElementById( "toolbox_project" ).style.display = "none";
       document.getElementById( "toolbar_nav" ).style.display = "none";
 
       CATMAID.statusBar.replaceLast('');
       CATMAID.statusBar.printCoords('');
 
+      this.trigger(Project.EVENT_PROJECT_DESTROYED);
+      Project.trigger(Project.EVENT_PROJECT_DESTROYED);
       project = null;
     };
 
@@ -344,7 +342,7 @@
      */
     this.moveTo = function(zp, yp, xp, sp, completionCallback) {
       if (!this.canMove()) {
-        return Promise.resolve("A location change is not possible at this moment");
+        return Promise.reject(new CATMAID.Warning("A location change is not possible at this moment"));
       }
 
       self.coordinates.x = xp;
@@ -361,6 +359,8 @@
           tool.redraw();
         self.trigger(Project.EVENT_LOCATION_CHANGED, self.coordinates.x,
           self.coordinates.y, self.coordinates.z);
+        Project.trigger(Project.EVENT_LOCATION_CHANGED, self.coordinates.x,
+          self.coordinates.y, self.coordinates.z);
         if (typeof completionCallback !== "undefined") {
           completionCallback();
         }
@@ -373,7 +373,7 @@
      */
     this.moveToProject = function(zp, yp, xp, res, completionCallback) {
       if (!this.canMove()) {
-        return Promise.reject("A location change is not possible at this moment");
+        return Promise.reject(new CATMAID.Warning("A location change is not possible at this moment"));
       }
 
       self.coordinates.x = xp;
@@ -392,6 +392,8 @@
         if (tool && tool.redraw)
           tool.redraw();
         self.trigger(Project.EVENT_LOCATION_CHANGED, self.coordinates.x,
+          self.coordinates.y, self.coordinates.z);
+        Project.trigger(Project.EVENT_LOCATION_CHANGED, self.coordinates.x,
           self.coordinates.y, self.coordinates.z);
         if (typeof completionCallback !== "undefined") {
           completionCallback();
@@ -454,9 +456,14 @@
             sgsAdded = true;
           }
 
-          url += "&sid" + i + "=" + sv.primaryStack.id + "&s" + i + "=" + sv.s;
+          url += "&sid" + i + "=" + sv.primaryStack.encodedId() + "&s" + i + "=" + sv.s;
         }
       }
+
+      if (CATMAID.client.showContextHelp) {
+        url += "&help=true";
+      }
+
       return url;
     };
 
@@ -480,7 +487,6 @@
     // initialise
     var self = this;
     this.id = pid;
-    if ( typeof requestQueue == "undefined" ) requestQueue = new RequestQueue();
 
     var tool = null;
 
@@ -606,10 +612,13 @@
 
   // Add event support to project and define some event constants
   CATMAID.asEventSource(Project.prototype);
+  CATMAID.asEventSource(Project);
   Project.EVENT_STACKVIEW_ADDED = 'project_stackview_added';
   Project.EVENT_STACKVIEW_CLOSED = 'project_stackview_closed';
   Project.EVENT_STACKVIEW_FOCUS_CHANGED = 'project_stackview_focus_changed';
   Project.EVENT_LOCATION_CHANGED = 'project_location_changed';
+  Project.EVENT_PROJECT_DESTROYED = 'project_project_destroyed';
+  Project.EVENT_TOOL_CHANGED = 'project_tool_changed';
 
   Project.prototype.updateInterpolatableLocations = function() {
     var self = this;

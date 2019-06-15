@@ -1,4 +1,5 @@
 -r requirements.txt
-django-migration-testcase==0.0.11
-selenium==3.0.2
+django-migration-testcase==0.0.13
+selenium==3.141.0
 sauceclient==1.0.0
+mypy==0.650; platform_python_implementation != 'PyPy'

@@ -1,14 +1,15 @@
-import json
-
 from collections import defaultdict
 from itertools import chain
+import json
+from typing import Any, DefaultDict, Dict, List
 
 from django.db import connection
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
+from django.utils.decorators import method_decorator
 
 from catmaid.control.authentication import (requires_user_role, user_can_edit,
         can_edit_or_fail)
-from catmaid.control.common import get_request_list
+from catmaid.control.common import get_request_bool, get_request_list
 from catmaid.models import (Class, ClassInstance, Connector, Relation, Sampler,
         SamplerDomain, SamplerDomainType, SamplerDomainEnd, SamplerInterval,
         SamplerIntervalState, SamplerState, SamplerConnector,
@@ -16,15 +17,58 @@ from catmaid.models import (Class, ClassInstance, Connector, Relation, Sampler,
 from catmaid.util import Point3D, is_collinear
 
 from rest_framework.decorators import api_view
+from rest_framework.views import APIView
 
 
 SAMPLER_CREATED_CLASS = "sampler-created"
-
 epsilon = 0.001
+known_leaf_modes = frozenset(('ignore', 'merge', 'short-interval', 'merge-or-create'))
+
+def serialize_sampler(sampler) -> Dict[str, Any]:
+    return {
+       'id': sampler.id,
+       'creation_time': float(sampler.creation_time.strftime('%s')),
+       'edition_time': float(sampler.edition_time.strftime('%s')),
+       'interval_length': sampler.interval_length,
+       'interval_error': sampler.interval_error,
+       'leaf_segment_handling': sampler.leaf_segment_handling,
+       'merge_limit': sampler.merge_limit,
+       'review_required': sampler.review_required,
+       'create_interval_boundaries': sampler.create_interval_boundaries,
+       'state_id': sampler.sampler_state_id,
+       'skeleton_id': sampler.skeleton_id,
+       'user_id': sampler.user_id,
+    }
+
+def serialize_domain(domain, with_ends=True, with_intervals=True) -> Dict[str, Any]:
+    detail = {
+        "id": domain.id,
+        "sampler_id": domain.sampler_id,
+        "type_id": domain.domain_type_id,
+        "parent_interval": domain.parent_interval_id,
+        "start_node_id": domain.start_node_id,
+        "user_id": domain.user_id,
+        "project_id": domain.project_id,
+    }
+
+    if with_ends:
+        domain_ends = domain.samplerdomainend_set.all()
+        detail["ends"] = [{
+            "id": e.id,
+            "node_id": e.end_node_id
+        } for e in domain_ends]
+
+    if with_intervals:
+        detail['intervals'] = [[
+            i.id, i.start_node_id, i.end_node_id, i.interval_state_id
+        ] for i in domain.samplerinterval_set.all()]
+
+    return detail
+
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_samplers(request, project_id):
+def list_samplers(request:HttpRequest, project_id) -> JsonResponse:
     """Get a collection of available samplers.
 
     Optionally, the "skeleton_ids" parameter can provide a list of skeleton IDs.
@@ -92,14 +136,14 @@ def list_samplers(request, project_id):
         required: true
     """
     skeleton_ids = get_request_list(request.GET, 'skeleton_ids', map_fn=int)
-    with_intervals = request.GET.get('with_intervals', False) == "true"
-    with_domains = with_intervals or (request.GET.get('with_domains', False) == "true")
+    with_intervals = get_request_bool(request.GET, 'with_intervals', False)
+    with_domains = with_intervals or (get_request_bool(request.GET, 'with_domains', False))
 
     samplers = Sampler.objects.all()
     if skeleton_ids:
         samplers = samplers.filter(skeleton_id__in=skeleton_ids)
 
-    domains = defaultdict(list)
+    domains = defaultdict(list) # type: DefaultDict[Any, List]
     if with_domains:
         domain_query = SamplerDomain.objects.filter(sampler__in=samplers) \
                 .prefetch_related('samplerdomainend_set')
@@ -107,40 +151,12 @@ def list_samplers(request, project_id):
             domain_query = domain_query.prefetch_related('samplerinterval_set')
 
         for domain in domain_query:
-            domain_ends = domain.samplerdomainend_set.all()
-            domain_data = {
-                "id": domain.id,
-                "sampler_id": domain.sampler_id,
-                "type_id": domain.domain_type_id,
-                "parent_interval": domain.parent_interval_id,
-                "start_node_id": domain.start_node_id,
-                "user_id": domain.user_id,
-                "project_id": domain.project_id,
-                "ends": [{
-                    "id": e.id,
-                    "node_id": e.end_node_id
-                } for e in domain_ends]
-            }
-            if with_intervals:
-                domain_data['intervals'] = [[
-                    i.id, i.start_node_id, i.end_node_id, i.interval_state_id
-                ] for i in domain.samplerinterval_set.all()]
-
+            domain_data = serialize_domain(domain, with_ends=True,
+                    with_intervals=with_intervals)
             domains[domain.sampler_id].append(domain_data)
 
-    def exportSampler(s):
-        s = {
-           'id': s.id,
-           'creation_time': float(s.creation_time.strftime('%s')),
-           'edition_time': float(s.edition_time.strftime('%s')),
-           'interval_length': s.interval_length,
-           'interval_error': s.interval_error,
-           'review_required': s.review_required,
-           'create_interval_boundaries': s.create_interval_boundaries,
-           'state_id': s.sampler_state_id,
-           'skeleton_id': s.skeleton_id,
-           'user_id': s.user_id,
-        }
+    def exportSampler(s) -> Dict[str, Any]:
+        s = serialize_sampler(s)
 
         if with_domains:
             s['domains'] = domains.get(s['id'], [])
@@ -150,9 +166,100 @@ def list_samplers(request, project_id):
     return JsonResponse([exportSampler(s) for s in samplers], safe=False)
 
 
+class SamplerDetail(APIView):
+
+    @method_decorator(requires_user_role(UserRole.Browse))
+    def get(self, request:HttpRequest, project_id, sampler_id) -> JsonResponse:
+        """Get details on a particular sampler.
+        ---
+        parameters:
+         - name: project_id
+           description: The project to operate in.
+           type: integer
+           paramType: path
+           required: false
+         - name: sampler_id
+           description: The sampler to return.
+           type: integer
+           paramType: path
+           required: false
+         - name: with_domains
+           description: Optional flag to include all domains of all result sampler results.
+           type: boolean
+           paramType: form
+           required: false
+           defaultValue: false
+         - name: with_intervals
+           description: Optional flag to include all intervals of all domains. Implies with_domains.
+           type: boolean
+           paramType: form
+           required: false
+           default: false
+           defaultValue: false
+        """
+        sampler_id = int(sampler_id)
+        with_intervals = get_request_bool(request.GET, 'with_intervals', False)
+        with_domains = get_request_bool(request.GET, 'with_domains', False) or with_intervals
+
+        if with_domains:
+            sampler = Sampler.objects.prefetch_related('samplerdomain_set').get(pk=sampler_id)
+        else:
+            sampler = Sampler.objects.get(pk=sampler_id)
+
+        sampler_detail = serialize_sampler(sampler)
+
+        if with_domains:
+            domains = []
+            domains_and_ends = SamplerDomain.objects.filter(sampler=sampler_id) \
+                    .prefetch_related('samplerdomainend_set')
+            if with_intervals:
+                domains_and_ends = domains_and_ends.prefetch_related('samplerinterval_set')
+
+            for domain in domains_and_ends:
+                domain_data = serialize_domain(domain, with_ends=True,
+                        with_intervals=with_intervals)
+                domains.append(domain_data)
+            sampler_detail['domains'] = domains
+
+        return JsonResponse(sampler_detail)
+
+    @method_decorator(requires_user_role(UserRole.Browse))
+    def post(self, request:HttpRequest, project_id, sampler_id) -> JsonResponse:
+        """Set fields of a particular sampler.
+        ---
+        parameters:
+         - name: project_id
+           description: The project to operate in.
+           type: integer
+           paramType: path
+           required: false
+         - name: sampler_id
+           description: The sampler to return.
+           type: integer
+           paramType: path
+           required: false
+         - name: leaf_handling_mode
+           description: Optional flag to include all domains of all result sampler results.
+           type: boolean
+           paramType: form
+           required: false
+        """
+        sampler_id = int(sampler_id)
+        can_edit_or_fail(request.user, sampler_id, 'catmaid_sampler')
+
+        sampler = Sampler.objects.get(pk=sampler_id)
+
+        leaf_handling_mode = request.POST.get('leaf_handling_mode')
+        if leaf_handling_mode and leaf_handling_mode in known_leaf_modes:
+            sampler.leaf_segment_handling = leaf_handling_mode
+            sampler.save()
+
+        return JsonResponse(serialize_sampler(sampler))
+
+
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def add_sampler(request, project_id):
+def add_sampler(request:HttpRequest, project_id) -> JsonResponse:
     """Create a new sampler for a skeleton.
     ---
     parameters:
@@ -182,6 +289,19 @@ def add_sampler(request, project_id):
        type: boolean
        paramType: form
        required: true
+     - name: leaf_segment_handling
+       description: How leaf segments should be handled, can be 'ignore', 'merge' or 'short-interval'.
+       type: string
+       paramType: form
+       required: false
+       default: ignore
+     - name: merge_limit
+       description: A leaf handling option for merge-or-create mode. A value between 0 and 1 representing the interval length ratio up to which a merge is allowed.
+       type: string
+       paramType: form
+       required: false
+       default: 0
+       default: ignore
     """
     skeleton_id = request.POST.get('skeleton_id')
     if skeleton_id:
@@ -213,12 +333,31 @@ def add_sampler(request, project_id):
     else:
         raise ValueError("Need create_interval_boundaries parameter")
 
+    leaf_segment_handling = request.POST.get('leaf_segment_handling')
+    if leaf_segment_handling:
+        if leaf_segment_handling not in known_leaf_modes:
+            raise ValueError("The leaf_segment_handling parameter needs to " +
+                    "be one of 'ignore', 'merge' or 'short-interval'")
+    else:
+        leaf_segment_handling = 'ignore'
+
+    merge_limit = request.POST.get('merge_limit')
+    if merge_limit:
+        merge_limit = float(merge_limit)
+    else:
+        merge_limit = 0
+
+    if merge_limit < 0 or merge_limit > 1.0:
+        raise ValueError("Merge limit needs to be between 0 and 1")
+
     sampler_state = SamplerState.objects.get(name="open");
 
     sampler = Sampler.objects.create(
         skeleton_id=skeleton_id,
         interval_length=interval_length,
         interval_error=interval_error,
+        leaf_segment_handling=leaf_segment_handling,
+        merge_limit=merge_limit,
         review_required=review_required,
         create_interval_boundaries=create_interval_boundaries,
         sampler_state=sampler_state,
@@ -230,6 +369,8 @@ def add_sampler(request, project_id):
         "skeleton_id": sampler.skeleton_id,
         "interval_length": sampler.interval_length,
         "interval_error": sampler.interval_error,
+        "leaf_segment_handling": sampler.leaf_segment_handling,
+        "merge_limit": sampler.merge_limit,
         "review_required": sampler.review_required,
         "create_interval_boundaries": sampler.create_interval_boundaries,
         "sampler_state": sampler.sampler_state_id,
@@ -239,7 +380,7 @@ def add_sampler(request, project_id):
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def delete_sampler(request, project_id, sampler_id):
+def delete_sampler(request:HttpRequest, project_id, sampler_id) -> JsonResponse:
     """Delete a sampler if permissions allow it.
 
     If the sampler was created with allowing the creation of new boundary nodes,
@@ -260,13 +401,17 @@ def delete_sampler(request, project_id, sampler_id):
     can_edit_or_fail(request.user, sampler_id, "catmaid_sampler")
     sampler = Sampler.objects.get(id=sampler_id)
 
-    n_deleted_nodes = 0
-    delete_created_nodes = request.POST.get('delete_created_nodes', 'true') == 'true'
-    if delete_created_nodes and sampler.create_interval_boundaries:
-        labeled_as_relation = Relation.objects.get(project=project_id, relation_name='labeled_as')
-        label_class = Class.objects.get(project=project_id, class_name='label')
+    labeled_as_relation = Relation.objects.get(project=project_id, relation_name='labeled_as')
+    label_class = Class.objects.get(project=project_id, class_name='label')
+    try:
         label_class_instance = ClassInstance.objects.get(project=project_id,
                 class_column=label_class, name=SAMPLER_CREATED_CLASS)
+    except ClassInstance.DoesNotExist:
+        label_class_instance = None
+
+    n_deleted_nodes = 0
+    delete_created_nodes = get_request_bool(request.POST, 'delete_created_nodes', True)
+    if label_class_instance and delete_created_nodes and sampler.create_interval_boundaries:
         # If the sampler was parameterized to created interval boundary nodes,
         # these nodes can now be removed if they are still collinear with their
         # child and parent node and have not been touched. These nodes are all
@@ -290,12 +435,24 @@ def delete_sampler(request, project_id, sampler_id):
             SET extra_float_digits = 3;
 
             WITH sampler_treenode AS (
-                -- Get all treenodes linked to intervals of this sampler.
-                SELECT DISTINCT UNNEST(ARRAY[i.start_node_id, i.end_node_id]) AS id
-                FROM catmaid_samplerinterval i
-                JOIN catmaid_samplerdomain d
-                    ON i.domain_id = d.id
-                WHERE d.sampler_id = %(sampler_id)s
+                -- Get all treenodes linked to intervals of this sampler. Only
+                -- select those nodes that are referenced by no other sampler
+                -- (using an anti join).
+                SELECT DISTINCT all_added_nodes.id
+                FROM (
+                    SELECT DISTINCT UNNEST(ARRAY[i.start_node_id, i.end_node_id]) AS id
+                    FROM catmaid_samplerinterval i
+                    JOIN catmaid_samplerdomain d
+                        ON i.domain_id = d.id
+                    WHERE d.sampler_id = %(sampler_id)s
+                ) all_added_nodes
+                JOIN catmaid_samplerinterval csi
+                    ON csi.start_node_id = all_added_nodes.id
+                    OR csi.end_node_id = all_added_nodes.id
+                JOIN catmaid_samplerdomain csd
+                    ON csd.id = csi.domain_id
+                GROUP BY all_added_nodes.id
+                HAVING COUNT(DISTINCT csd.sampler_id) = 1
             ), sampler_created_treenode AS (
                 -- Find all treenodes that were created by the sampler and are
                 -- undmodified.
@@ -376,7 +533,7 @@ def delete_sampler(request, project_id, sampler_id):
 
             if nodes_to_remove:
                 query_parts = []
-                params = []
+                remove_params = []
                 if parent_update:
                     update_nodes_template = ",".join("(%s, %s)" for _ in parent_update)
                     update_nodes_flattened = list(chain.from_iterable(parent_update))
@@ -386,7 +543,7 @@ def delete_sampler(request, project_id, sampler_id):
                         FROM (VALUES {}) nodes_to_update(child_id, parent_id)
                         WHERE treenode.id = nodes_to_update.child_id;
                     """.format(update_nodes_template))
-                    params = update_nodes_flattened
+                    remove_params = update_nodes_flattened
 
                 delete_nodes_template = ",".join("(%s)" for _ in nodes_to_remove)
                 query_parts.append("""
@@ -400,9 +557,9 @@ def delete_sampler(request, project_id, sampler_id):
                     )
                     RETURNING id;
                 """.format(delete_nodes_template))
-                params = params + nodes_to_remove
+                remove_params = remove_params + nodes_to_remove
 
-                cursor.execute("\n".join(query_parts), params)
+                cursor.execute("\n".join(query_parts), remove_params)
                 deleted_node_ids = [r[0] for r in cursor.fetchall()]
                 n_deleted_nodes = len(deleted_node_ids)
 
@@ -415,7 +572,7 @@ def delete_sampler(request, project_id, sampler_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_sampler_states(request, project_id):
+def list_sampler_states(request:HttpRequest, project_id) -> JsonResponse:
     """Get a list of all available sampler states and their IDs.
     ---
     models:
@@ -451,7 +608,7 @@ def list_sampler_states(request, project_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_connector_states(request, project_id):
+def list_connector_states(request:HttpRequest, project_id) -> JsonResponse:
     """Get a list of all available connectors states and their IDs.
     ---
     models:
@@ -487,7 +644,7 @@ def list_connector_states(request, project_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_connectors(request, project_id):
+def list_connectors(request:HttpRequest, project_id) -> JsonResponse:
     """Get a list of connectors that already have a state associated with them.
 
     If a connector is not part of this list it is implicetely assumed to be in
@@ -562,7 +719,7 @@ def list_connectors(request, project_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_domain_types(request, project_id):
+def list_domain_types(request:HttpRequest, project_id) -> JsonResponse:
     """Get a list of all available domain types.
     ---
     models:
@@ -598,7 +755,7 @@ def list_domain_types(request, project_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_sampler_domains(request, project_id, sampler_id):
+def list_sampler_domains(request:HttpRequest, project_id, sampler_id) -> JsonResponse:
     """Get a collection of available sampler domains.
     ---
     parameters:
@@ -648,7 +805,8 @@ def list_sampler_domains(request, project_id, sampler_id):
         required: true
     """
     sampler_id = int(sampler_id)
-    domains = SamplerDomain.objects.filter(sampler_id=sampler_id)
+    domains = SamplerDomain.objects.filter(sampler_id=sampler_id) \
+            .prefetch_related('samplerdomainend_set')
 
     return JsonResponse([{
        'id': d.id,
@@ -658,12 +816,16 @@ def list_sampler_domains(request, project_id, sampler_id):
        'start_node_id': d.start_node_id,
        'type_id': d.domain_type_id,
        'user_id': d.user_id,
+       'ends': [{
+            'id': e.id,
+            'node_id': e.end_node_id,
+        } for e in d.samplerdomainend_set.all()]
     } for d in domains], safe=False)
 
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def add_sampler_domain(request, project_id, sampler_id):
+def add_sampler_domain(request:HttpRequest, project_id, sampler_id) -> JsonResponse:
     """Create a new domain for a sampler.
     ---
     parameters:
@@ -746,7 +908,7 @@ def add_sampler_domain(request, project_id, sampler_id):
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def add_multiple_sampler_domains(request, project_id, sampler_id):
+def add_multiple_sampler_domains(request:HttpRequest, project_id, sampler_id) -> JsonResponse:
     """Create a new domain for a sampler.
     ---
     parameters:
@@ -758,7 +920,7 @@ def add_multiple_sampler_domains(request, project_id, sampler_id):
        required: true
     """
     sampler_id = int(sampler_id)
-    domains = get_request_list(request.POST, 'domains', map_fn)
+    domains = get_request_list(request.POST, 'domains', map_fn=json.loads)
 
     result_domains = []
     for domain in domains:
@@ -784,11 +946,13 @@ def add_multiple_sampler_domains(request, project_id, sampler_id):
 
         d = SamplerDomain.objects.create(
             sampler_id=sampler_id,
-            start_node=start_node,
-            domain_type=domain_type,
+            start_node=start_node_id,
+            domain_type=domain_type_id,
             parent_interval_id=parent_interval_id,
             user=request.user,
             project_id=project_id)
+
+        domain_ends = d.samplerdomainend_set.all()
 
         result_domains.append({
             "id": d.id,
@@ -806,65 +970,9 @@ def add_multiple_sampler_domains(request, project_id, sampler_id):
 
     return JsonResponse(result_domains, safe=False)
 
-
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_domain_intervals(request, project_id, domain_id):
-    """Get a collection of available sampler domains intervals.
-    ---
-    parameters:
-     - name: domain_id
-       description: Domain to list intervals for
-       type: integer
-       paramType: form
-       required: true
-    models:
-      interval_entity:
-        id: interval_entity
-        description: A result domain interval.
-        properties:
-          id:
-            type: integer
-            description: Id of interval
-          creation_time:
-            type: string
-            description: The point in time the interval was created
-            required: true
-          edition_time:
-            type: string
-            description: The last point in time the interval was edited.
-            required: true
-          state_id:
-            type: integer
-            description: ID of interval state
-            required: true
-          user_id:
-            type: integer
-            description: User ID of interval creator.
-            required: true
-    type:
-      intervals:
-        type: array
-        items:
-          $ref: interval_entity
-        description: Matching intervals
-        required: true
-    """
-    domain_id = int(domain_id)
-    intervals = SamplerInterval.objects.filter(domain_id=domain_id)
-
-    return JsonResponse([{
-       'id': i.id,
-       'creation_time': float(i.creation_time.strftime('%s')),
-       'edition_time': float(i.edition_time.strftime('%s')),
-       'state_id': i.interval_state_id,
-       'user_id': i.user_id,
-    } for i in intervals], safe=False)
-
-
-@api_view(['GET'])
-@requires_user_role([UserRole.Browse])
-def get_domain_details(request, project_id, domain_id):
+def get_domain_details(request:HttpRequest, project_id, domain_id) -> JsonResponse:
     """Get details on a particular domain.
     """
     domain_id=int(domain_id)
@@ -887,7 +995,7 @@ def get_domain_details(request, project_id, domain_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_interval_states(request, project_id):
+def list_interval_states(request:HttpRequest, project_id) -> JsonResponse:
     """Get a list of all available interval states.
     ---
     models:
@@ -923,7 +1031,7 @@ def list_interval_states(request, project_id):
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def set_connector_state(request, project_id, interval_id, connector_id):
+def set_connector_state(request:HttpRequest, project_id, interval_id, connector_id) -> JsonResponse:
     """Set state of sampler connector
     ---
     parameters:
@@ -969,7 +1077,7 @@ def set_connector_state(request, project_id, interval_id, connector_id):
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def add_all_intervals(request, project_id, domain_id):
+def add_all_intervals(request:HttpRequest, project_id, domain_id) -> JsonResponse:
     """Create all intervals in a particular domain.
     ---
     parameters:
@@ -1044,7 +1152,9 @@ def add_all_intervals(request, project_id, domain_id):
         parent_loc = Point3D(parent.location_x, parent.location_y, parent.location_z)
 
         if not is_collinear(child_loc, parent_loc, new_node_loc, True, epsilon):
-            raise ValueError('New node location has to be collinear with child and parent')
+            raise ValueError('New node location has to be collinear with child ' +
+                    'and parent. Child: {}, New Node: {}, Parent: {}'.format(
+                            child_loc, new_node_loc, parent_loc))
 
         # Tag new treenode with SAMPLER_CREATED_CLASS
         label, _ = ClassInstance.objects.get_or_create(project_id=project_id,
@@ -1066,7 +1176,7 @@ def add_all_intervals(request, project_id, domain_id):
             if i[0] not in added_node_index]
     # Iterate over root intervals and create child nodes until another existing
     # node is found.
-    new_nodes = dict()
+    new_nodes = dict() # type: Dict
     for root_interval in existing_parent_intervals:
         current_interval = root_interval
         while current_interval:
@@ -1122,7 +1232,7 @@ def add_all_intervals(request, project_id, domain_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def list_domain_intervals(request, project_id, domain_id):
+def list_domain_intervals(request:HttpRequest, project_id, domain_id) -> JsonResponse:
     """Get a collection of available sampler domains intervals.
     ---
     parameters:
@@ -1179,7 +1289,7 @@ def list_domain_intervals(request, project_id, domain_id):
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate])
-def set_interval_state(request, project_id, interval_id):
+def set_interval_state(request:HttpRequest, project_id, interval_id) -> JsonResponse:
     """Set state of an interval.
     ---
     parameters:

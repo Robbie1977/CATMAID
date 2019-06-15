@@ -5,7 +5,7 @@
   "use strict";
 
   // Suppress display of the PIXI banner message in the console.
-  PIXI.utils._saidHello = true;
+  PIXI.utils.skipHello();
 
   PixiLayer.contexts = new Map();
 
@@ -17,10 +17,28 @@
    * @param {StackViewer} stackViewer The stack viewer to which this context belongs.
    */
   function PixiContext(stackViewer) {
+    let options = {
+        transparent: true,
+        backgroundColor: 0x000000,
+        antialias: true,
+        stencil: true};
+    let view = document.createElement('canvas');
+
+    // Try to get WebGL 2 context, if WebGL 2 is unavailable fall back to WebGl 1.
+    let rawContext = view.getContext('webgl2', options);
+    if (rawContext) {
+      this.webglVersion = 2;
+    } else {
+      this.webglVersion = 1;
+      rawContext = view.getContext('webgl', options);
+    }
+
+    options.context = rawContext;
+    options.view = view;
     this.renderer = new PIXI.autoDetectRenderer(
         stackViewer.getView().clientWidth,
         stackViewer.getView().clientHeight,
-        {transparent: true, backgroundColor: 0x000000, antialias: true});
+        options);
     this.stage = new PIXI.Container();
     this.layersRegistered = new Set();
 
@@ -65,6 +83,59 @@
     if (allReady) this.renderer.render(this.stage);
   };
 
+  /**
+   * Renderer the content of this context to a URL-encoded type.
+   * @param  {@string} type               URL encoding format, e.g., 'image/png'
+   * @param  {@PIXI.RenderTexture} canvas Target render texture, to reuse.
+   * @return {string}                     URL-encoded content.
+   */
+  PixiContext.prototype.toDataURL = function (type, canvas) {
+    canvas = canvas || new PIXI.RenderTexture.create(this.renderer.width, this.renderer.height);
+    this.renderer.render(this.stage, canvas);
+    return this.renderer.plugins.extract.canvas(canvas).toDataURL(type);
+  };
+
+
+  function Loader() {
+    this._queue = new Set();
+  }
+
+  Loader.prototype.constructor = Loader;
+
+  Loader.prototype.add = function (url, headers, completionCallback) {
+    var request = new Request(
+        url,
+        {mode: 'cors', credentials: 'same-origin', headers: headers});
+    this._queue.add(request);
+    var remove = (function () { this._queue.delete(request); }).bind(this);
+    fetch(request)
+        .then(function (response) {
+          return response.blob();
+        })
+        .then(function (blob) {
+          var objUrl = window.URL.createObjectURL(blob);
+          var image = new Image();
+
+          image.onload = function () {
+            var texture = PIXI.Texture.fromLoader(this, url);
+            window.URL.revokeObjectURL(objUrl);
+            completionCallback({url: url, texture: texture});
+          };
+
+          image.src = objUrl;
+        })
+        .catch(error => this.handleError(error, url))
+        .then(remove);
+  };
+
+  Loader.prototype.handleError = function (error, url) {
+    console.log(error, url);
+  };
+
+  Loader.prototype.queueLength = function () {
+    return this._queue.size;
+  };
+
 
   /**
    * Loads textures from URLs, tracks use through reference counting, caches
@@ -77,11 +148,10 @@
     this._boundResourceLoaded = this._resourceLoaded.bind(this);
     this._concurrency = 16;
     this._counts = {};
-    this._loader = new PIXI.loaders.Loader('', this._concurrency);
-    this._loader.load();
-    this._loader._queue.empty = this._loadFromQueue.bind(this);
+    this._loader = new Loader(this._concurrency);
     this._loading = {};
     this._loadingQueue = [];
+    this._loadingQueueHeaders = {};
     this._loadingRequests = new Set();
     this._unused = [];
     this._unusedCapacity = 256;
@@ -101,7 +171,7 @@
    * @return {Object}            A request tracking object that can be used to
    *                             to cancel this request.
    */
-  PixiContext.TextureManager.prototype.load = function (urls, callback) {
+  PixiContext.TextureManager.prototype.load = function (urls, headers, callback) {
     var request = {urls: urls, callback: callback, remaining: 0};
     // Remove any URLs already cached or being loaded by other requests.
     var newUrls = urls.filter(function (url) {
@@ -114,6 +184,10 @@
         this._loading[url] = new Set([request]);
         return true;
       }
+    }, this);
+
+    newUrls.forEach(function (url) {
+      this._loadingQueueHeaders[url] = headers;
     }, this);
 
     if (request.remaining === 0) {
@@ -134,17 +208,17 @@
    * @private
    */
   PixiContext.TextureManager.prototype._loadFromQueue = function () {
-    var toDequeue = this._concurrency - this._loader._queue.length();
+    var toDequeue = this._concurrency - this._loader.queueLength();
     if (toDequeue < 1) return;
     var remainingQueue = this._loadingQueue.splice(toDequeue);
-    this._loadingQueue.forEach(function (url) {
-      this._loader.add(url,
-                       {crossOrigin: true,
-                        xhrType: PIXI.loaders.Resource.XHR_RESPONSE_TYPE.BLOB},
-                       this._boundResourceLoaded);
-    }, this);
+    var toLoad = this._loadingQueue;
     this._loadingQueue = remainingQueue;
-    this._loader.load();
+    toLoad.forEach(function (url) {
+      this._loader.add(url,
+                       this._loadingQueueHeaders[url],
+                       this._boundResourceLoaded);
+      delete this._loadingQueueHeaders[url];
+    }, this);
   };
 
   /**
@@ -156,11 +230,10 @@
    */
   PixiContext.TextureManager.prototype._resourceLoaded = function (resource) {
     var url = resource.url;
-    delete this._loader.resources[url];
     var requests = this._loading[url];
     delete this._loading[url];
 
-    if (PIXI.utils.TextureCache.hasOwnProperty(url)) {
+    if (url in PIXI.utils.TextureCache) {
       if (resource.texture && !resource.texture.valid) {
         // If there was an error, remove texture from Pixi's cache.
         resource.texture.destroy(true);
@@ -179,6 +252,8 @@
         request.callback();
       }
     }, this);
+
+    this._loadFromQueue();
   };
 
   /**
@@ -264,7 +339,13 @@
 
       if (outKey !== null) {
         delete this._counts[outKey];
-        PIXI.utils.TextureCache[outKey].destroy(true);
+        // While it is reasonable to expect the texture cache entry to be there,
+        // there are reports where the destroy() call on a cached texture
+        // failed, because of an unavailable entry. To mitigate this, an extra
+        // check is performed until the root cause for this problem is found.
+        if (PIXI.utils.TextureCache[outKey]) {
+          PIXI.utils.TextureCache[outKey].destroy(true);
+        }
         delete PIXI.utils.TextureCache[outKey];
       }
 
@@ -421,8 +502,7 @@
         .filter(function (modeKey) { // Filter modes that are not different from normal.
           var glBlendFuncs = glBlendModes[PIXI.BLEND_MODES[modeKey]];
           return modeKey == 'NORMAL' ||
-              glBlendFuncs[0] !== normBlendFuncs[0] ||
-              glBlendFuncs[1] !== normBlendFuncs[1]; })
+              !CATMAID.tools.arraysEqual(glBlendFuncs, normBlendFuncs); })
         .map(function (modeKey) {
           return modeKey.toLowerCase().replace(/_/, ' '); });
   };
@@ -446,6 +526,26 @@
       child.blendMode = PIXI.BLEND_MODES[modeKey];
     });
     this.syncFilters();
+  };
+
+  PixiLayer.prototype._setTextureInterpolationMode = function (texture, pixiInterpolationMode) {
+    let renderer = this._context.renderer;
+    let gl = renderer.gl;
+    const glScaleMode = pixiInterpolationMode === PIXI.SCALE_MODES.LINEAR ?
+        gl.LINEAR : gl.NEAREST;
+
+    if (texture && texture.valid) {
+      texture.baseTexture.scaleMode = pixiInterpolationMode;
+
+      let glTexture = texture.baseTexture._glTextures[renderer.CONTEXT_UID];
+
+      if (glTexture) {
+        texture.baseTexture._glTextures[renderer.CONTEXT_UID].bind();
+
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, glScaleMode);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, glScaleMode);
+      }
+    }
   };
 
   /**
@@ -655,9 +755,10 @@
           numberInput.min = '0';
           numberInput.max = '16777215';
           numberInput.step = '1';
+          numberInput.value = PixiLayer.Filters.arr2int(this.pixiFilter[param.name]);
           (function(setParam, numberInput) {
             numberInput.onchange = function() {
-              setParam(int2arr(Number(this.value)));
+              setParam(PixiLayer.Filters.int2arr(Number(this.value)));
             };
           })(self.setParam.bind(self, param.name), numberInput);
           numberDiv.appendChild(numberInput);
@@ -713,7 +814,7 @@
     this.updateMatrix();
   };
 
-  PixiLayer.Filters.Invert.prototype = Object.create(PIXI.Filter.prototype);
+  PixiLayer.Filters.Invert.prototype = Object.create(PIXI.filters.ColorMatrixFilter.prototype);
   PixiLayer.Filters.Invert.prototype.constructor = PixiLayer.Filters.Invert;
 
   PixiLayer.Filters.Invert.prototype.updateMatrix = function () {
@@ -910,7 +1011,7 @@
    * @param num
    * @returns {Array.<*>}
    */
-  var int2arr = function(num) {
+  PixiLayer.Filters.int2arr = function(num) {
     var arr = [];
     var divisor;
     var remainder = num;
@@ -924,7 +1025,7 @@
     return arr;
   };
 
-  var arr2int = function(arr) {
+  PixiLayer.Filters.arr2int = function(arr) {
     var out = 0;
     for (var i = 0; i < arr.length-1; i++) {
       out += Math.floor(arr[i]*255) * Math.pow(256, i);
@@ -954,37 +1055,37 @@
     var fragmentSrc = `
       uniform vec4 unknownLabel;
       uniform vec4 unknownColor;
-      
+
       uniform vec4 backgroundLabel;
       uniform vec4 backgroundColor;
-      
+
       uniform float foregroundAlpha;
       uniform float seed;
-      
+
       varying vec2 vTextureCoord;
       uniform sampler2D uSampler;
-      
+
       float whenEq(vec4 x, vec4 y) {
           return 1.0 - sign(distance(x, y));
       }
-      
+
       vec4 hashToColor(vec4 label) {
           const float SCALE = 33452.5859; // Some large constant to make the truncation interesting.
           label = fract(label * SCALE); // Truncate some information.
           label += dot(label, label.wzyx + 100.0 * seed); // Mix channels and add the salt.
           return vec4(fract((label.xzy + label.ywz) * label.zyw), 1.0) * foregroundAlpha;
       }
-      
+
       void main(void){
           vec4 current = texture2D(uSampler, vTextureCoord);
-      
+
           float isUnknown = whenEq(current, unknownLabel);
           float isBackground = whenEq(current, backgroundLabel);
-      
+
           vec4 final = unknownColor * isUnknown;
           final += backgroundColor * isBackground;
           final += hashToColor(current) * (1.0 - min(isUnknown + isBackground, 1.0));
-      
+
           gl_FragColor.rgba = final;
       }
     `;

@@ -8,40 +8,79 @@
   /**
    * Create a new shader based material to have active node focused shading.
    */
-  var makeNearActiveNodeSplitMaterial = function(baseMaterial, cameraSpace, activeNodeDistance) {
-    var material = new CATMAID.ShaderLineBasicMaterial(baseMaterial);
+  var makeNearActiveNodeSplitMaterial = function(baseMaterial, cameraSpace,
+      activeNodeDistance, bufferGeometry) {
 
-    // Determine active node distance in the vertex shader and pass to the
-    // fragment shader as a varying.
-    material.insertSnippet(
-        'vertexDeclarations',
-        'uniform vec3 u_activeNodePosition;\n' +
+    var vertexDeclarations = 'uniform vec3 u_activeNodePosition;\n' +
         'uniform float u_horizon;\n' +
-        'varying float activeNodeDistanceDarkening;\n');
-    material.insertSnippet(
-        'vertexPosition',
-        (cameraSpace ?
+        'varying float activeNodeDistanceDarkening;\n';
+    var fragmentDeclarations = 'varying float activeNodeDistanceDarkening;\n';
+
+    if (bufferGeometry) {
+      var material =  new THREE.LineMaterial({
+        color: baseMaterial.color,
+        opacity: baseMaterial.opacity,
+        linewidth: baseMaterial.uniforms.linewidth.value,
+        resolution: new THREE.Vector2(baseMaterial.uniforms.resolution.value.x,
+            baseMaterial.uniforms.resolution.value.y),
+      });
+      var vertexPosition = (cameraSpace ?
+          'vec3 camVert = (vec4(instanceStart, 1.0) * modelMatrix).xyz - cameraPosition;\n' +
+          'vec3 camAtn = (vec4(u_activeNodePosition, 1.0) * modelMatrix).xyz - cameraPosition;\n' +
+          'float zDist = distance(dot(camVert, normalize(camAtn)), length(camAtn));\n'
+          :
+          'float zDist = distance(instanceStart.z, u_activeNodePosition.z);\n') +
+          'activeNodeDistanceDarkening = 1.0 - clamp(zDist/u_horizon, 0.0, 1.0);\n';
+      var fragmentColor = 'gl_FragColor = vec4(diffuseColor.rgb * activeNodeDistanceDarkening, diffuseColor.a);\n';
+      var newVertexShader = CATMAID.insertSnippetIntoShader(material.vertexShader,
+          CATMAID.PickingLineMaterial.INSERTION_LOCATIONS['vertexDeclarations'],
+          vertexDeclarations);
+      newVertexShader = CATMAID.insertSnippetIntoShader(newVertexShader,
+          CATMAID.PickingLineMaterial.INSERTION_LOCATIONS['vertexEnd'],
+          vertexPosition);
+      var newFragmentShader = CATMAID.insertSnippetIntoShader(material.fragmentShader,
+          CATMAID.PickingLineMaterial.INSERTION_LOCATIONS['fragmentDeclarations'],
+          fragmentDeclarations);
+      newFragmentShader = CATMAID.insertSnippetIntoShader(newFragmentShader,
+          CATMAID.PickingLineMaterial.INSERTION_LOCATIONS['fragmentColor'],
+          fragmentColor);
+
+      material.vertexShader = newVertexShader;
+      material.fragmentShader = newFragmentShader;
+      material.needsUpdate = true;
+
+      $.extend(material.uniforms, {
+          u_activeNodePosition: { type: 'v3', value: SkeletonAnnotations.getActiveNodeProjectVector3() },
+          u_horizon: { type: 'f', value: activeNodeDistance }});
+
+      return material;
+    } else {
+      var vertexPosition = (cameraSpace ?
           'vec3 camVert = (vec4(position, 1.0) * modelMatrix).xyz - cameraPosition;\n' +
           'vec3 camAtn = (vec4(u_activeNodePosition, 1.0) * modelMatrix).xyz - cameraPosition;\n' +
           'float zDist = distance(dot(camVert, normalize(camAtn)), length(camAtn));\n'
           :
           'float zDist = distance(position.z, u_activeNodePosition.z);\n') +
-          'activeNodeDistanceDarkening = 1.0 - clamp(zDist/u_horizon, 0.0, 1.0);\n');
+          'activeNodeDistanceDarkening = 1.0 - clamp(zDist/u_horizon, 0.0, 1.0);\n';
+      var fragmentColor = 'gl_FragColor = vec4(outgoingLight * activeNodeDistanceDarkening, diffuseColor.a);\n';
+      var material = new CATMAID.ShaderLineBasicMaterial(baseMaterial);
 
-    material.insertSnippet(
-        'fragmentDeclarations',
-        'varying float activeNodeDistanceDarkening;\n');
-    material.insertSnippet(
-        'fragmentColor',
-        'gl_FragColor = vec4(outgoingLight * activeNodeDistanceDarkening, diffuseColor.a);\n');
+      // Determine active node distance in the vertex shader and pass to the
+      // fragment shader as a varying.
+      material.insertSnippet('vertexDeclarations', vertexDeclarations);
+      material.insertSnippet('vertexPosition', vertexPosition);
 
-    material.addUniforms({
-        u_activeNodePosition: { type: 'v3', value: SkeletonAnnotations.getActiveNodeProjectVector3() },
-        u_horizon: { type: 'f', value: activeNodeDistance }});
+      material.insertSnippet('fragmentDeclarations', fragmentDeclarations);
+      material.insertSnippet('fragmentColor', fragmentColor);
 
-    material.refresh();
+      material.addUniforms({
+          u_activeNodePosition: { type: 'v3', value: SkeletonAnnotations.getActiveNodeProjectVector3() },
+          u_horizon: { type: 'f', value: activeNodeDistance }});
 
-    return material;
+      material.refresh();
+
+      return material;
+    }
   };
 
   /**
@@ -76,7 +115,7 @@
       fetchSkeletons(
           skeleton_ids,
           function(skeleton_id) {
-            return django_url + project.id + '/skeleton/' + skeleton_id + '/reviewed-nodes';
+            return CATMAID.makeURL(project.id + '/skeleton/' + skeleton_id + '/reviewed-nodes');
           },
           function(skeleton_id) { return {}; }, // post
           function(skeleton_id, json) {
@@ -104,7 +143,7 @@
     fetchSkeletons(
         skeleton_ids,
         function(skid) {
-          return django_url + project.id + '/' + skid + '/0/1/0/compact-arbor';
+          return CATMAID.makeURL(project.id + '/' + skid + '/0/1/0/compact-arbor');
         },
         function(skid) { return {}; }, // post
         function(skid, json) {
@@ -365,6 +404,15 @@
           var nDomains = domains.length;
           for (var j=0; j<nDomains; ++j) {
             var domain = domains[j];
+            var allowedDomainIds = options.viewerOptions.allowed_sampler_domain_ids;
+
+            // Ignore domain, if a domain filter exists and this domain isn't
+            // allowed.
+            if (allowedDomainIds && allowedDomainIds > 0 &&
+                allowedDomainIds.indexOf(domain.id) === -1) {
+              continue;
+            }
+
             domainColorIndex.set(domain.id, nAddedDomains % nColors);
             ++nAddedDomains;
 
@@ -404,6 +452,81 @@
         return makeSamplerIntervalColorizer(skeleton, options);
       }
     },
+    'x-lut': {
+      vertexColorizer: function(skeleton, options) {
+        let lutResolution = options.lutResolution || 256;
+        let lut = new THREE.Lut(options.colorMap || "rainbow", lutResolution);
+        let xOffset = options.xOffset || 0;
+        let xDim = options.xDim || 0;
+        lut.setMin(xOffset);
+        lut.setMax(xDim + xOffset);
+        return function(vertex) {
+          return lut.getColor(vertex.x);
+        };
+      }
+    },
+    'y-lut': {
+      vertexColorizer: function(skeleton, options) {
+        let lutResolution = options.lutResolution || 256;
+        let lut = new THREE.Lut(options.colorMap || "rainbow", lutResolution);
+        let yOffset = options.yOffset || 0;
+        let yDim = options.yDim || 0;
+        lut.setMin(yOffset);
+        lut.setMax(yDim + yOffset);
+        return function(vertex) {
+          return lut.getColor(vertex.y);
+        };
+      }
+    },
+    'z-lut': {
+      vertexColorizer: function(skeleton, options) {
+        let lutResolution = options.lutResolution || 256;
+        let lut = new THREE.Lut(options.colorMap || "rainbow", lutResolution);
+        let zOffset = options.zOffset || 0;
+        let zDim = options.zDim || 0;
+        lut.setMin(zOffset);
+        lut.setMax(zDim + zOffset);
+        return function(vertex) {
+          return lut.getColor(vertex.z);
+        };
+      }
+    },
+    'skeleton-x-lut': {
+      vertexColorizer: function(skeleton, options) {
+        let lutResolution = options.lutResolution || 256;
+        let lut = new THREE.Lut(options.colorMap || "rainbow", lutResolution);
+        let bb = skeleton.getBoundingBox();
+        lut.setMin(bb.min.x);
+        lut.setMax(bb.max.x);
+        return function(vertex) {
+          return lut.getColor(vertex.x);
+        };
+      }
+    },
+    'skeleton-y-lut': {
+      vertexColorizer: function(skeleton, options) {
+        let lutResolution = options.lutResolution || 256;
+        let lut = new THREE.Lut(options.colorMap || "rainbow", lutResolution);
+        let bb = skeleton.getBoundingBox();
+        lut.setMin(bb.min.y);
+        lut.setMax(bb.max.y);
+        return function(vertex) {
+          return lut.getColor(vertex.y);
+        };
+      }
+    },
+    'skeleton-z-lut': {
+      vertexColorizer: function(skeleton, options) {
+        let lutResolution = options.lutResolution || 256;
+        let lut = new THREE.Lut(options.colorMap || "rainbow", lutResolution);
+        let bb = skeleton.getBoundingBox();
+        lut.setMin(bb.min.z);
+        lut.setMax(bb.max.z);
+        return function(vertex) {
+          return lut.getColor(vertex.z);
+        };
+      }
+    },
   };
 
   let makeSamplerIntervalColorizer = function(skeleton, options) {
@@ -425,20 +548,32 @@
       var nDomains = domains.length;
       for (var j=0; j<nDomains; ++j) {
         // Get intervals for domain
-        var domain = domains[j];
+        let domain = domains[j];
+
+        // Skip this domain if the user set 'allowed_sampler_domains'
+        if (options.viewerOptions.allowed_sampler_domain_ids &&
+            options.viewerOptions.allowed_sampler_domain_ids.length > 0 &&
+            options.viewerOptions.allowed_sampler_domain_ids.indexOf(domain.id) === -1) {
+          continue;
+        }
+
         if (!domain.intervals || domain.intervals.length === 0) {
           let addedIntervals = CATMAID.Sampling.intervalsFromModels(
               arbor, positions, domain, sampler.interval_length,
-              sampler.interval_error, true, true, intervalMap);
+              sampler.interval_error, true, sampler.create_interval_boundaries,
+              sampler.leaf_segment_handling, true, intervalMap, undefined,
+              sampler.merge_limit);
           let mockIntervals = addedIntervals.intervals.map(function(ai, i) {
             // use the negative index as ID for now. There should not be
             // any collissions.
             return [-1 * i, parseInt(ai[0], 10), parseInt(ai[1], 10), null];
           });
-          CATMAID.Sampling.updateIntervalMap(arbor, mockIntervals, intervalMap);
+          CATMAID.Sampling.updateIntervalMap(arbor, mockIntervals, intervalMap, domain.start_node_id);
         } else if (intervalMap) {
           // Update interval map with existing intervals
-          CATMAID.Sampling.updateIntervalMap(arbor, domain.intervals, intervalMap);
+          CATMAID.Sampling.updateIntervalMap(arbor, domain.intervals,
+              intervalMap, domain.start_node_id,
+              options.viewerOptions.allowed_sampler_interval_ids);
         }
       }
     }
@@ -473,6 +608,16 @@
         let domains = sampler.domains;
         let nDomains = domains.length;
         for (var j=0; j<nDomains; ++j) {
+          let domain = domains[j];
+          let allowedDomainIds = options.viewerOptions.allowed_sampler_domain_ids;
+
+          // Skip this domain if the user set 'allowed_sampler_domains'
+          if (allowedDomainIds &&
+              allowedDomainIds.length > 0 &&
+              allowedDomainIds.indexOf(domain.id) === -1) {
+            continue;
+          }
+
           // Get domain arbor
           let domainArbor = CATMAID.Sampling.domainArborFromModel(arbor, domain);
           let successors = domainArbor.allSuccessors();
@@ -484,21 +629,17 @@
             let isIntervalStart = workingSetIntervalStart.shift();
 
             let intervalId = intervalMap[currentNodeId];
-            if (intervalId === undefined || intervalId === null) {
-              // This node is part of the domain, but part of no interval. This
-              // can only happen at the end of branches and we don't have to
-              // expect more valid intervals on this branch. Therefore, we can
-              // just continue with the next working set node.
-              continue;
+            let isInInterval = intervalId !== undefined && intervalId !== null;
+            let intervalColor;
+            if (isInInterval) {
+                intervalColor = colorMap.get(intervalId);
+                if (!intervalColor) {
+                  intervalColor = nextColor;
+                  colorMap.set(intervalId, intervalColor);
+                }
             }
 
-            let intervalColor = colorMap.get(intervalId);
-            if (!intervalColor) {
-              intervalColor = nextColor;
-              colorMap.set(intervalId, intervalColor);
-            }
-
-            // Check all succcessors of current reference node if they are part
+            // Check all successors of current reference node if they are part
             // of an interval that is different from the current one. If so,
             // assign the picked color for that interval already.
             let succ = successors[currentNodeId];
@@ -512,10 +653,11 @@
                 // If the successor node is part of a new interval, pre-assign
                 // color.
                 let succIntervalId = intervalMap[succId];
-                if (succIntervalId && succIntervalId !== intervalId) {
-                  // All branches start at same node. If the current reference
-                  // node is the first one of looked at of its interval, it ...
-                  if (isIntervalStart) {
+                if (succIntervalId !== undefined && succIntervalId !== intervalId) {
+                  // All branches start at same node. If there are branches
+                  // (more than one successor interval), color them all the
+                  // same.
+                  if (isIntervalStart && succ.length > 1) {
                     colorMap.set(succIntervalId, intervalColor);
                   } else {
                     colorMap.set(succIntervalId, nextColor);
@@ -649,14 +791,18 @@
           up = 0.5;
           down = 0;
         }
-        var vs = skeleton.geometry['neurite'].vertices;
         var axon_nodes = skeleton.axon.edges;
-        for (var i=0; i<vs.length; i+=2) {
-          var node_id = vs[i].node_id;
+        var nodeMetaData = skeleton.nodeMetaData;
+        // This could be improved by being able to iterate only unique nodes
+        // (instead of edge ends).
+        for (var i=0; i<nodeMetaData.length; i+=2) {
+          var node_id = nodeMetaData[i].node_id;
           node_weights[node_id] = axon_nodes[node_id] ? down : up;
         }
+
         // Handle root
-        node_weights[skeleton.axon.root] = axon_nodes[node_id] ? down : up;
+        node_weights[skeleton.axon.root] = axon_nodes[skeleton.axon.root] ? down : up;
+
         return node_weights;
       }
     },
@@ -692,14 +838,14 @@
     'near_active_node_z_camera': {
       material:function(skeleton, options) {
         var material = makeNearActiveNodeSplitMaterial(skeleton.line_material, true,
-            options.distance_to_active_node);
+            options.distance_to_active_node, options.triangulated_lines);
         return material;
       }
     },
     'near_active_node_z_project': {
       material: function(skeleton, options) {
         var material = makeNearActiveNodeSplitMaterial(skeleton.line_material, false,
-            options.distance_to_active_node);
+            options.distance_to_active_node, options.triangulated_lines);
         return material;
       }
     },
@@ -875,12 +1021,15 @@
         var samplerEdges = {};
         for (var i=0; i<samplers.length; ++i) {
           var sampler = samplers[i];
-          CATMAID.Sampling.samplerEdges(arbor, sampler, samplerEdges);
+          CATMAID.Sampling.samplerEdges(arbor, sampler, samplerEdges,
+              options.allowed_sampler_domain_ids);
         }
+
+        var nonDomainWeight = options.sampler_domain_shading_other_weight || 0;
 
         // Add all nodes in all domains
         var nodeWeights = arbor.nodesArray().reduce(function(o, d) {
-          o[d] = samplerEdges[d] === undefined ? 0 : 1;
+          o[d] = samplerEdges[d] === undefined ? nonDomainWeight : 1;
           return o;
         }, {});
 
@@ -891,6 +1040,7 @@
       prepare: initSamplerIntervals,
       weights: function(skeleton, options) {
         var arbor = skeleton.createArbor();
+        var positions = skeleton.getPositions();
         var samplers = skeleton.samplers;
         if (!samplers) {
           // Weight each node zero if there are no samplers
@@ -904,8 +1054,8 @@
         var intervalMap = {};
         for (var i=0; i<samplers.length; ++i) {
           var sampler = samplers[i];
-          CATMAID.Sampling.intervalEdges(arbor, skeleton.getPositions(),
-              sampler, true, true, intervalMap);
+          CATMAID.Sampling.intervalEdges(arbor, positions,
+              sampler, true, true, true, intervalMap);
         }
 
         // Look at all nodes of all domains. Give them a weight of 1 if they are
@@ -1001,6 +1151,14 @@
       material: function(skeleton) {
         if (isFn(shading.material)) {
           return shading.material(skeleton, options);
+        } else if (options.triangulated_lines) {
+          return new THREE.LineMaterial({
+            color: skeleton.line_material.color,
+            opacity: skeleton.line_material.opacity,
+            linewidth: options.skeleton_line_width,
+            resolution: new THREE.Vector2(skeleton.space.canvasWidth,
+                skeleton.space.canvasHeight),
+          });
         } else {
           return new THREE.LineBasicMaterial({
             color: skeleton.line_material.color,
@@ -1033,7 +1191,14 @@
             reviewedColor: new THREE.Color(1.0, 0.0, 1.0),
             axonColor: new THREE.Color(0, 1, 0),
             dendriteColor: new THREE.Color(0, 0, 1),
-            notComputableColor: new THREE.Color(0.4, 0.4, 0.4)
+            notComputableColor: new THREE.Color(0.4, 0.4, 0.4),
+            xDim: options.xDim,
+            xOffset: options.xOffset,
+            yDim: options.yDim,
+            yOffset: options.yOffset,
+            zDim: options.zDim,
+            zOffset: options.zOffset,
+            viewerOptions: options
           });
         } else {
           return function(vertex) {

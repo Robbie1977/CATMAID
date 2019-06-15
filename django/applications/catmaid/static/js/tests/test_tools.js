@@ -167,5 +167,58 @@ QUnit.test('Utilities test', function( assert ) {
         new Date(Date.UTC(2017, 10, 6, 3, 58, 32, 835595 / 1000)), 'Test date is parsed correctly');
     assert.deepEqual(CATMAID.tools.isoStringToDate('2017-11-06T03:58:32Z'),
         new Date(Date.UTC(2017, 10, 6, 3, 58, 32)), 'Test date is parsed correctly');
+    assert.deepEqual(CATMAID.tools.isoStringToDate('2017-11-06T03:58:32.835595+00:00'),
+        new Date(Date.UTC(2017, 10, 6, 3, 58, 32, 835595 / 1000)), 'Test date is parsed correctly');
+    assert.deepEqual(CATMAID.tools.isoStringToDate('2017-11-06T03:58:32-00:00'),
+        new Date(Date.UTC(2017, 10, 6, 3, 58, 32)), 'Test date is parsed correctly');
+  })();
+
+  // Test Color construction util
+  (function() {
+    assert.deepEqual(CATMAID.tools.getColor(0), new THREE.Color(0, 0, 0),
+        "Colors can be created from numbers");
+    assert.deepEqual(CATMAID.tools.getColor(16711680), new THREE.Color(1, 0, 0),
+        "Colors can be created from numbers");
+    assert.deepEqual(CATMAID.tools.getColor({r: 0, g: 1, b: 0.2}), new THREE.Color(0, 1, 0.2),
+        "Colors can be created from objects");
+    assert.deepEqual(CATMAID.tools.getColor("rgb(255,0,0)"), new THREE.Color(1,0,0),
+        "Colors can be created from strings");
+    assert.deepEqual(CATMAID.tools.getColor(0xff0000), new THREE.Color(1,0,0),
+        "Colors can be created from hex values");
+  })();
+
+  // Test extractFileName
+  (function() {
+    assert.strictEqual(CATMAID.tools.extractFileNameNoExt('/a/b/c.d'), 'c',
+        'CATMAID.tools.extractFileName() works');
+    assert.strictEqual(CATMAID.tools.extractFileNameNoExt('/abc.txt'), 'abc',
+        'CATMAID.tools.extractFileName() works');
+    assert.strictEqual(CATMAID.tools.extractFileNameNoExt('abc.txt'), 'abc',
+        'CATMAID.tools.extractFileName() works');
+    assert.strictEqual(CATMAID.tools.extractFileNameNoExt('/a/b/c.d.e'), 'c.d',
+        'CATMAID.tools.extractFileName() works');
+    assert.strictEqual(CATMAID.tools.extractFileNameNoExt('/abc.d.txt'), 'abc.d',
+        'CATMAID.tools.extractFileName() works');
+    assert.strictEqual(CATMAID.tools.extractFileNameNoExt('abc.d.txt'), 'abc.d',
+        'CATMAID.tools.extractFileName() works');
+  })();
+
+  // Test mod
+  (function() {
+    assert.strictEqual(CATMAID.tools.mod(3, 5), 3, 'CATMAID.tools.mod() works');
+    assert.strictEqual(CATMAID.tools.mod(8, 5), 3, 'CATMAID.tools.mod() works');
+    assert.strictEqual(CATMAID.tools.mod(-2, 5), 3, 'CATMAID.tools.mod() works');
+    assert.strictEqual(CATMAID.tools.mod(-8, 5), 2, 'CATMAID.tools.mod() works');
+  })();
+
+  // Test urlJoin
+  (function() {
+    assert.strictEqual(CATMAID.tools.urlJoin(null, null), undefined, 'CATMAID.tools.urlJoin() works');
+    assert.strictEqual(CATMAID.tools.urlJoin('a', null), 'a', 'CATMAID.tools.urlJoin() works');
+    assert.strictEqual(CATMAID.tools.urlJoin(null, 'b'), 'b', 'CATMAID.tools.urlJoin() works');
+    assert.strictEqual(CATMAID.tools.urlJoin('a', 'b'), 'a/b', 'CATMAID.tools.urlJoin() works');
+    assert.strictEqual(CATMAID.tools.urlJoin('a/', 'b'), 'a/b', 'CATMAID.tools.urlJoin() works');
+    assert.strictEqual(CATMAID.tools.urlJoin('a', '/b'), 'a/b', 'CATMAID.tools.urlJoin() works');
+    assert.strictEqual(CATMAID.tools.urlJoin('a/', '/b'), 'a/b', 'CATMAID.tools.urlJoin() works');
   })();
 });

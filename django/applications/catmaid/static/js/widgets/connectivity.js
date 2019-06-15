@@ -23,6 +23,8 @@
     this.showGapjunctionTable = false;
     // Hide attachment  connections by default
     this.showAttachmentTable = false;
+    // A set of visible link types
+    this.visibleLinkTypes = new Set(['incoming', 'outgoing']);
     // Ordering of neuron table, by default no ordering is applied
     this.currentOrder = [];
     // If no original colors are used, new skeleton models will be colored
@@ -40,6 +42,9 @@
     // A set of nodes allowed by node filters
     this.allowedNodes = new Set();
 
+    // A mapping from partner skeletons to annotations
+    this.annotationMapping = null;
+
     // Find default page length that is closest to 50
     this.pageLength = CATMAID.pageLengthOptions.reduce(function(bestMatch, l) {
       if (null === bestMatch || (l > bestMatch && l <= 50)) {
@@ -53,6 +58,8 @@
       this.handleChangedSkeleton, this);
     CATMAID.Skeletons.on(CATMAID.Skeletons.EVENT_SKELETON_DELETED,
       this.handleDeletedSkeleton, this);
+    CATMAID.Annotations.on(CATMAID.Annotations.EVENT_ANNOTATIONS_CHANGED,
+      this.handleChangedAnnotations, this);
   };
 
   SkeletonConnectivity.prototype = Object.create(CATMAID.SkeletonSource.prototype);
@@ -184,6 +191,8 @@
         this.handleChangedSkeleton, this);
     CATMAID.Skeletons.off(CATMAID.Skeletons.EVENT_SKELETON_DELETED,
         this.handleDeletedSkeleton, this);
+    CATMAID.Annotations.off(CATMAID.Annotations.EVENT_ANNOTATIONS_CHANGED,
+        this.handleChangedAnnotations, this);
   };
 
   SkeletonConnectivity.prototype.getWidgetConfiguration = function() {
@@ -230,6 +239,33 @@
         plot2.setAttribute("value", "Open partner chart");
         plot2.onclick = this.openStackedBarChart.bind(this);
         controls.appendChild(plot2);
+
+        var showLinks = document.createElement('input');
+        showLinks.setAttribute("type", "button");
+        showLinks.setAttribute("value", "List links");
+        showLinks.onclick = this.listLinks.bind(this);
+        controls.appendChild(showLinks);
+
+        var linkTypeSelection = CATMAID.DOM.createAsyncPlaceholder(
+            CATMAID.DOM.initLinkTypeList({
+              byPartnerReference: true,
+              context: this,
+              color: false,
+              getSelectedLinkTypes: function() {
+                return Array.from(self.visibleLinkTypes);
+              },
+              setLinkTypeVisibility: function(linkId, visible) {
+                if (visible) {
+                  self.visibleLinkTypes.add(linkId);
+                } else {
+                  self.visibleLinkTypes.delete(linkId);
+                }
+              },
+              update: self.update.bind(self),
+            }));
+        var linkTypeSelectionWrapper = document.createElement('span');
+        linkTypeSelectionWrapper.appendChild(linkTypeSelection);
+        controls.append(linkTypeSelectionWrapper);
 
         var layoutToggle = document.createElement('input');
         layoutToggle.setAttribute('id', 'connectivity-layout-toggle-' + this.widgetID);
@@ -302,35 +338,6 @@
         rotateHeaderLabel.appendChild(rotateHeader);
         rotateHeaderLabel.appendChild(document.createTextNode('Partner header 90°'));
         controls.appendChild(rotateHeaderLabel);
-
-        var gapjunctionToggle = document.createElement('input');
-        gapjunctionToggle.setAttribute('id', 'connectivity-gapjunctiontable-toggle-' + this.widgetID);
-        gapjunctionToggle.setAttribute('type', 'checkbox');
-        if (this.showGapjunctionTable) {
-          gapjunctionToggle.setAttribute('checked', 'checked');
-        }
-        gapjunctionToggle.onchange = function() {
-          self.showGapjunctionTable = this.checked;
-        };
-        var gapjunctionLabel = document.createElement('label');
-        gapjunctionLabel.appendChild(gapjunctionToggle);
-        gapjunctionLabel.appendChild(document.createTextNode('Show gap junctions'));
-        controls.appendChild(gapjunctionLabel);
-
-        var attachmentToggle = document.createElement('input');
-        attachmentToggle.setAttribute('id', 'connectivity-attachmenttable-toggle-' + this.widgetID);
-        attachmentToggle.setAttribute('type', 'checkbox');
-        if (this.showAttachmentTable) {
-          attachmentToggle.setAttribute('checked', 'checked');
-        }
-        attachmentToggle.onchange = function() {
-          self.showAttachmentTable = this.checked;
-          self.update();
-        };
-        var attachmentLabel = document.createElement('label');
-        attachmentLabel.appendChild(attachmentToggle);
-        attachmentLabel.appendChild(document.createTextNode('Show attachments'));
-        controls.appendChild(attachmentLabel);
 
         var filterRulesToggle = document.createElement('input');
         filterRulesToggle.setAttribute('id', 'connectivity-filterrules-toggle-' + this.widgetID);
@@ -452,6 +459,10 @@
    * Get models for all skeletons in this source.
    */
   SkeletonConnectivity.prototype.getSkeletonModels = function(onlySelected) {
+    return this._getSkeletonModels(onlySelected, true);
+  };
+
+  SkeletonConnectivity.prototype._getSkeletonModels = function(onlySelected, filter) {
     var self = this;
     var widgetID = this.widgetID;
     var skeletons = this.skeletons;
@@ -468,7 +479,8 @@
     // filtering at the moment. Therefore, the table is read.
     this.partnerSets.forEach(function(ps) {
       var table = $('#' + ps.id + '_connectivity_table' + this.widgetID);
-      var data = table.DataTable().rows({order: 'current', search: 'applied'}).nodes();
+      var searchMode = filter ? 'applied' : 'none';
+      var data = table.DataTable().rows({order: 'current', search: searchMode}).nodes();
       data.reduce(function(o, tr) {
         var skid = tr.dataset.skeletonId;
         if ((self.skeletonSelection[skid] || !onlySelected) && !models[skid]) {
@@ -480,6 +492,14 @@
     }, this);
 
     return models;
+  };
+
+  SkeletonConnectivity.prototype.getSkeletons = function() {
+    return Object.keys(this.getSkeletonModels()).map(m => parseInt(m, 10));
+  };
+
+  SkeletonConnectivity.prototype._getSkeletons = function(onlySelected, filter) {
+    return Object.keys(this._getSkeletonModels(onlySelected, filter)).map(m => parseInt(m, 10));
   };
 
   /**
@@ -516,6 +536,15 @@
   };
 
   /**
+   * If annotations change, update the widget's annotation map. This currently
+   * disregards the changed entities and could therefore be more efficient.
+   */
+  SkeletonConnectivity.prototype.handleChangedAnnotations = function(
+      changedEntities, annotations) {
+    this._updateAnnotationMap(true);
+  };
+
+  /**
    * Clears the widgets content container.
    */
   SkeletonConnectivity.prototype._clearGUI = function() {
@@ -540,10 +569,18 @@
   var partnerSetTypes = {
     'incoming': {name: 'Upstream', rel: 'presynaptic_to'},
     'outgoing': {name: 'Downstream', rel: 'postsynaptic_to'},
-    'gapjunctions': {name: 'Gap junction', rel: 'gapjunction_with',
+    'gapjunction': {name: 'Gap junction', rel: 'gapjunction_with',
         pTitle: 'Gap junction with neuron', ctrShort: 'gj'},
-    'attachments': {name: 'Attachment', rel: 'attached_to',
-        pTitle: 'Linked to neuron', ctrShort: 'site'}
+    'tightjunction': {name: 'Tight junction', rel: 'tightjunction_with',
+        pTitle: 'Tight junction with neurons', ctrShort: 'tj'},
+    'desmosome': {name: 'Desmosome', rel: 'desmosome_with',
+        pTitle: 'Desmosome with neurons', ctrShort: 'ds'},
+    'attachment': {name: 'Attachment', rel: 'attached_to',
+        pTitle: 'Linked to neuron', ctrShort: 'site'},
+    'abutting': {name: 'Abutting', rel: 'abbutting',
+        pTitle: 'Abutting partners', ctrShort: 'abt'},
+    'close_object': {name: 'Close object', rel: 'close_to',
+        pTitle: 'Close object', ctrShort: 'cls'},
   };
 
   SkeletonConnectivity.prototype.update = function() {
@@ -559,13 +596,17 @@
       delete oldPartnerModels[skid];
     }
 
-    var partnerSetIds = ['incoming', 'outgoing'];
-    if (this.showGapjunctionTable) {
-      partnerSetIds.push('gapjunctions');
-    }
-    if (this.showAttachmentTable) {
-      partnerSetIds.push('attachments');
-    }
+    var partnerSetIds = Array.from(this.visibleLinkTypes);
+
+    // Get annotation filters
+    let annotationFilterInUse = false;
+    let annotationFilterMap = this.partnerSets.reduce(function(m, p) {
+      m[p.id] = p.annotationFilter;
+      if (p.annotationFilter) {
+        annotationFilterInUse = true;
+      }
+      return m;
+    }, {});
 
     var self = this;
 
@@ -573,6 +614,7 @@
       'source_skeleton_ids': skids,
       'boolean_op': $('#connectivity_operation' + this.widgetID).val(),
       'with_nodes': this.applyFilterRules && this.filterRules.length > 0,
+      'link_types': partnerSetIds,
     }, false, 'update_connectivity_table', true)
     .then(function(json) {
       // Remove present partner sets
@@ -584,8 +626,15 @@
       // Create partner sets
       partnerSetIds.forEach(function(psId) {
         var type = partnerSetTypes[psId];
-        self.addPartnerSet(new PartnerSet(psId, type.name, type.rel,
-            json[psId], type.pTitle, type.ctrShort));
+        if (!type) {
+          return;
+        }
+        let ps = new PartnerSet(psId, type.name, type.rel, json[psId],
+            type.pTitle, type.ctrShort);
+        if (annotationFilterMap[psId]) {
+          ps.annotationFilter = annotationFilterMap[psId];
+        }
+        self.addPartnerSet(ps);
 
         var reviewKey = psId + '_reviewers';
         json[reviewKey].forEach(self.reviewers.add.bind(self.reviewers));
@@ -601,18 +650,24 @@
         }
       }, newModels);
 
+      var prepare = self.annotationFilterInUse ?
+          self._updateAnnotationMap() : Promise.resolve();
+
       // Make all partners known to the name service
-      CATMAID.NeuronNameService.getInstance().registerAll(self, newModels, function() {
-        self.redraw();
-        // Create model container and announce new models
-        for (var skid in newModels) {
-          newModels[skid] = self.makeSkeletonModel(skid,
-              self.isInPartnerSet(skid, 'incoming'),
-              self.isInPartnerSet(skid, 'outgoing'),
-              false);
-        }
-        self.triggerAdd(newModels);
-      });
+      prepare.then(function() {
+        CATMAID.NeuronNameService.getInstance().registerAll(self, newModels, function() {
+          self.redraw();
+          // Create model container and announce new models
+          for (var skid in newModels) {
+            newModels[skid] = self.makeSkeletonModel(skid,
+                self.isInPartnerSet(skid, 'incoming'),
+                self.isInPartnerSet(skid, 'outgoing'),
+                false);
+          }
+          self.triggerAdd(newModels);
+        });
+      })
+      .catch(CATMAID.handleError);
     })
     .catch(function(error) {
       if (error !== 'REPLACED') {
@@ -805,7 +860,8 @@
      * Support function for creating a partner table.
      */
     var create_table = function(skids, skeletons, partnerSet,
-        hidePartnerThreshold, reviewFilter, nameInHeader, rotateHeader) {
+        hidePartnerThreshold, reviewFilter, nameInHeader, rotateHeader,
+        annotationMapping) {
 
       var thresholds = partnerSet.thresholds;
       var partners = partnerSet.getSynCountSortedPartners();
@@ -959,6 +1015,14 @@
           var count = filter_synapses(partner.skids[skid], thresholds.confidence[skid]);
           return count < (thresholds.count[skid] || 1);
         });
+
+        // If an annotation filter is set, only allow partners with this
+        // annotation.
+        if (partnerSet.annotationFilter) {
+          let annotations = annotationMapping.get(partner.id);
+          ignore = ignore || !annotations || annotations.indexOf(partnerSet.annotationFilter) == -1;
+        }
+
         ignore = ignore || partner.synaptic_count < thresholds.count['sum'];
         // Ignore partner if it has only fewer nodes than a threshold
         ignore = ignore || partner.num_nodes < hidePartnerThreshold;
@@ -1264,8 +1328,8 @@
     // The neuron table columns consist of three base columns and two threshold
     // columns for each partner set.
     var neuronTableColumns = [
-        {orderable: false},
-        {orderable: false},
+        {orderable: false, width: '6em'},
+        {orderable: false, width: '8em'},
         null
     ];
     thresholdSummary.forEach(function(ts) {
@@ -1276,6 +1340,7 @@
     // consistent fashion.
     neuronTable.DataTable({
       dom: "t",
+      autoWidth: false,
       paging: false,
       serverSide: false,
       order: this.currentOrder,
@@ -1493,7 +1558,7 @@
       var table = create_table.call(this, this.ordered_skeleton_ids,
         this.skeletons, partnerSet, this.hidePartnerThreshold,
         this.reviewFilter, this.showNeuronNameInHeader,
-        this.rotateColumnHeaders);
+        this.rotateColumnHeaders, this.annotationMapping);
       tableContainer.append(table);
 
       // Initialize datatable
@@ -1510,6 +1575,7 @@
         autoWidth: false,
         columnDefs: [
           {
+            width: '5em',
             // Checkbox column
             targets: [0],
             className: 'input-container',
@@ -1550,6 +1616,7 @@
           },
           {
             // Review column
+            class: 'cm-center',
             targets: [-2],
             render: function(data, type, row, meta) {
               return type === "display" ? (data + "%") : data;
@@ -1562,10 +1629,13 @@
       $(table).siblings('.connectivity_table_actions')
         // Add custom filter/search input to support regular expressions.
         .append($('<div class="dataTables_filter">')
-          .append($('<label />')
-            .text('Filter partners:')
+          .append($('<span />')
+            .css('margin', 'auto 0.5em auto 0.5em')
+            .text('Filter:')
+          )
+          .append($('<span />')
             .attr('title', 'Starting with / enables regular expressions')
-            .append($('<input type="search" />').on('keyup', function () {
+            .append($('<input type="search" placeholder="Partner name" />').on('keyup', function () {
               var search = this.value;
               if (search.length > 0 && search[0] === '/') {
                 // Treat the input as regex.
@@ -1592,6 +1662,22 @@
                 table.DataTable().column(1).search(search, false, true).draw();
               }
             }))
+          )
+          .append($('<span />')
+            .attr('title', 'An annotation')
+            .append($('<input type="search" placeholder="Annotation" />')
+              .on('search', function() {
+                partnerSet.annotationFilter = this.value.length === 0 ? null : this.value;
+                var prepare = partnerSet.annotationFilter ?
+                    widget._updateAnnotationMap() : Promise.resolve();
+                prepare
+                  .then(function() {
+                    widget.createConnectivityTable();
+                  })
+                  .catch(CATMAID.handleError);
+              })
+              .attr('data-role', 'annotation-filter')
+              .val(partnerSet.annotationFilter || ''))
           )
         )
         // Add table export buttons.
@@ -1655,6 +1741,10 @@
             widget.update();
           };
         })(this));
+
+    // Add annotation auto-completion
+    CATMAID.annotations.add_autocomplete_to_input(
+        $('input[data-role=annotation-filter]', tables));
 
     $('.dataTables_wrapper', tables).css('min-height', 0);
 
@@ -1795,6 +1885,12 @@
     var SF = WindowMaker.create("synapse-fractions");
   };
 
+  SkeletonConnectivity.prototype.listLinks = function() {
+    let skeletonIds = this.getSelectedSkeletons().map(Number);
+    let connectorListHandles = CATMAID.ConnectorList.fromSkeletonIds(
+        skeletonIds, undefined, undefined, this.getName());
+  };
+
   /**
    * A small widget to display a graph, plotting the number of upstream/downstream
    * partners against the number of synapses. A list of skeleton_ids has to be
@@ -1806,6 +1902,7 @@
     this.incoming = incoming;
     this.outgoing = outgoing;
     this.widgetID = this.registerInstance();
+    CATMAID.NeuronNameService.getInstance().registerAll(this, skeletons);
   };
 
   ConnectivityGraphPlot.prototype = {};
@@ -1822,6 +1919,7 @@
    * Custom destroy handler, that deletes all fields of this instance when called.
    */
   ConnectivityGraphPlot.prototype.destroy = function() {
+    CATMAID.NeuronNameService.getInstance().unregister(this);
     this.unregisterInstance();
     Object.keys(this).forEach(function(key) { delete this[key]; }, this);
   };
@@ -1830,6 +1928,13 @@
    * Custom resize handler, that redraws the graphs when called.
    */
   ConnectivityGraphPlot.prototype.resize = function() {
+    this.draw();
+  };
+
+  /**
+   * Redraw if neuron names change.
+   */
+  ConnectivityGraphPlot.prototype.updateNeuronNames = function() {
     this.draw();
   };
 
@@ -1937,9 +2042,14 @@
 
       // Colors: an array of hex values
       var colors = colorizer(skeletonIds);
-      var names = skeletonIds.map(function(skid) {
-        return this[skid].baseName;
-      }, skeletons);
+      let nns = CATMAID.NeuronNameService.getInstance();
+      let nameMap = skeletonIds.reduce(function(o, skid) {
+        o[skid] = nns.getName(skid);
+        return o;
+      }, {});
+      let names = skeletonIds.map(function(skid) {
+        return nameMap[skid];
+      });
 
       // Don't let the canvas be less than 400px wide
       if (container_width < 400) {
@@ -1951,7 +2061,7 @@
           id = "connectivity_plot_" + title + widgetID;
 
       CATMAID.svgutil.insertMultipleBarChart(container, id, width, height,
-          "N synapses", "N " + title + " Partners", names, a, colors,
+          "N synapses", "N " + title + " Partners", names, nameMap, a, colors,
           a.map(function(block, i) { return i+1; }));
     };
 
@@ -2042,6 +2152,38 @@
         self.update();
       })
       .catch(CATMAID.handleError);
+  };
+
+  /**
+   * Update the local annotation cache.
+   */
+  SkeletonConnectivity.prototype._updateAnnotationMap = function(force) {
+    var get;
+    if (!this.annotationMapping || force) {
+      // Get all data that is needed for the fallback list
+      get = CATMAID.fetch(project.id + '/skeleton/annotationlist', 'POST', {
+            skeleton_ids: this._getSkeletons(false, false),
+            metaannotations: 0,
+            neuronnames: 0,
+          })
+        .then((function(json) {
+          // Store mapping and update UI
+          this.annotationMapping = new Map();
+          for (var skeletonID in json.skeletons) {
+            // We know that we want to use this for filtering, so we can store
+            // the annotation names directly.
+            var annotations = json.skeletons[skeletonID].annotations.map(function(a) {
+              return json.annotations[a.id];
+            });
+            this.annotationMapping.set(parseInt(skeletonID, 10), annotations);
+          }
+          return this.annotationMapping;
+        }).bind(this));
+    } else {
+      get = Promise.resolve(this.annotationMapping);
+    }
+
+    return get;
   };
 
   // Make skeleton connectivity widget available in CATMAID namespace

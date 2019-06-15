@@ -10,7 +10,7 @@ Basic Installation Instructions
 ===============================
 
 These installation instructions have been tested on the most
-recent stable release of Ubuntu (16.04 xenial), so may need
+recent stable release of Ubuntu (18.04 bionic), so may need
 some minor changes for other Debian-based distributions.
 For installation on Mac OS X, first read these
 :ref:`additional instructions <installation-osx>`.
@@ -21,7 +21,7 @@ Introduction
 The most fundamental dependencies of CATMAID are:
 
 1. PostgreSQL >= 10 and PostGIS >= 2.4
-2. Python 2.7, 3.5, 3.6, PyPy2 or PyPy3
+2. Python 3.5, 3.6 or PyPy3
 3. Imagemagick (for generating image tiles)
 
 To get the required PostgreSQL version for Debian-based systems, such as
@@ -37,9 +37,15 @@ done so already)::
     wget --quiet -O - ${PG_KEY_URL} | sudo apt-key add -
     sudo apt-get update
 
+While Python 3.5 is supported, we recommend the use of Python 3.6. To be able to
+install it on Ubuntu 16.04 and earlier, the following needs to be done::
+
+    sudo add-apt-repository ppa:deadsnakes/ppa
+    sudo apt-get update
+
 And then you can install these dependencies with::
 
-    sudo apt-get install python postgresql-10 imagemagick
+    sudo apt-get install python3.6 postgresql-10 imagemagick
 
 CATMAID is based on the `Django web framework
 <https://www.djangoproject.com/>`_.  If you just wish to work on
@@ -63,29 +69,29 @@ the source code is in ``/home/alice/catmaid``::
 2. Install required Python packages
 ###################################
 
-We recommend the use of Python 2.7 for production use at the moment, but Python
-3.5 should work equally well. With a few more limitations PyPy2 can be used as
-ell (no cropping, no back-end plotting, no synapse clustering, no ontology
+We recommend the use of Python 3.6 for production use at the moment, but Python
+3.5 should work equally well. With a few more limitations PyPy3 can be used as
+well (no cropping, no back-end plotting, no synapse clustering, no ontology
 clustering).
 
 We strongly recommend that you install all Python package dependencies into a
 virtualenv, so that they are isolated from the system-wide installed packages
-and can be upgraded easily.  Some of these Python packages depend on system-wide
+and can be upgraded easily. Some of these Python packages depend on system-wide
 libraries that you will need to install in advance, however. You can do this
 with one of the following commands (the one suiting best your OS):
 
-Ubuntu 16.04:
+Ubuntu 18.04:
 
-    .. fileinclude:: ../../packagelist-ubuntu-16.04-apt.txt
+    .. fileinclude:: ../../packagelist-ubuntu-18.04-apt.txt
        :removelinebreaks:
        :indent:
        :prepend: sudo apt-get install
        :split: 75
        :splitend:  \
 
-Ubuntu 14.04:
+Ubuntu 16.04:
 
-    .. fileinclude:: ../../packagelist-ubuntu-14.04-apt.txt
+    .. fileinclude:: ../../packagelist-ubuntu-16.04-apt.txt
        :removelinebreaks:
        :indent:
        :prepend: sudo apt-get install
@@ -110,7 +116,7 @@ and call ``source ~/.bashrc`` again::
 To create a new virtualenv for CATMAID's Python dependencies,
 you can do::
 
-    mkvirtualenv --no-site-packages -p /usr/bin/python2.7 catmaid
+    mkvirtualenv --no-site-packages -p /usr/bin/python3.6 catmaid
 
 That will create a virtualenv in ``~/.virtualenvs/catmaid/``, and
 while your virtualenv is activated, Python libraries will be
@@ -138,6 +144,11 @@ shells, for example, you will need to activate it by running::
 
        mkvirtualenv --no-site-packages -p /usr/bin/pypy catmaid
 
+.. note::
+
+   If you are using Python 3.6 on Ubuntu 14.04 and 16.04, never uninstall Python
+   3.5, because it might break some parts of the system.
+
 Install all of the required Python packages with::
 
     cd /home/alice/catmaid/django
@@ -157,11 +168,11 @@ supports tiff (check e.g. with the help of "gm convert -list format").
 3. Install and configure PostgreSQL
 ###################################
 
-If you are comfortable with creating a new PostgreSQL database
-for CATMAID, then you should do that and continue to the next
-section. If you decide to do so, please make sure to also install the
-``postgis`` extension for the new CATMAID database. The advice here is a
-suggested approach for people who are unsure what to do.
+If you are comfortable with creating a new PostgreSQL database for CATMAID, then
+you should do that and continue to the next section. If you decide to do so,
+please make sure to also install the ``postgis`` extension and the ``pg_trgm``
+extension for the new CATMAID database. The advice here is a suggested approach
+for people who are unsure what to do.
 
 If you are uncomfortable with using the PostgreSQL interactive
 terminal from the command line, you may wish to install an
@@ -173,7 +184,7 @@ database called ``catmaid`` and a database user called
 ``catmaid_user``.  Firstly, we need to reconfigure PostgreSQL to
 allow password-based authentication for that user to that
 database.  To do that, edit the file
-``/etc/postgresql/9.6/main/pg_hba.conf`` and add this line as the
+``/etc/postgresql/10/main/pg_hba.conf`` and add this line as the
 *first* rule in that file::
 
     local catmaid catmaid_user md5
@@ -199,7 +210,7 @@ relations, e.g.::
 
     psql -U catmaid_user catmaid
     Password:
-    psql (9.6.5)
+    psql (10.4)
     Type "help" for help.
 
     catmaid=> \d

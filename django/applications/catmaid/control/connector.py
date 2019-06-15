@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import copy
 import json
-import six
 import logging
 
 from datetime import datetime, timedelta
 from collections import defaultdict
 
+from typing import Any, DefaultDict, Dict, List, Tuple, Union
+
 from django.db import connection
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
-from django.http import JsonResponse, Http404
+from django.http import HttpRequest, HttpResponse, Http404, JsonResponse
 
 from rest_framework.decorators import api_view
 
@@ -21,72 +21,19 @@ from catmaid.fields import Double3D
 from catmaid.models import Project, Stack, ProjectStack, Connector, \
         ConnectorClassInstance, Treenode, TreenodeConnector, UserRole
 from catmaid.control.authentication import requires_user_role, can_edit_or_fail
-from catmaid.control.link import create_treenode_links
-from catmaid.control.common import cursor_fetch_dictionary, \
-        get_relation_to_id_map, get_class_to_id_map, get_request_list
+from catmaid.control.link import (create_treenode_links, LINK_TYPES,
+        LINK_RELATION_NAMES, UNDIRECTED_LINK_TYPES)
+from catmaid.control.common import (cursor_fetch_dictionary,
+        get_relation_to_id_map, get_class_to_id_map, get_request_bool,
+        get_request_list)
 
-# Python 2 and 3 compatible map iterator
-from six.moves import map, filter
 
 logger = logging.getLogger(__name__)
 
 
-LINK_TYPES = [
-    {
-        'name': 'Presynaptic',
-        'type': 'Synaptic',
-        'relation': 'presynaptic_to'
-    }, {
-        'name': 'Postsynaptic',
-        'type': 'Synaptic',
-        'relation': 'postsynaptic_to'
-    }, {
-        'name': 'Abutting',
-        'type': 'Abutting',
-        'relation': 'abutting'
-    }, {
-        'name': 'Gap junction',
-        'type': 'Gap junction',
-        'relation': 'gapjunction_with'
-    }, {
-        'name': 'Attachment',
-        'type': 'Attachment',
-        'relation': 'attached_to'
-    }, {
-        'name': 'Close to',
-        'type': 'Spatial',
-        'relation': 'close_to'
-    }
-]
-
-KNOWN_LINK_PAIRS = {
-    'synaptic-connector': {
-        'source': 'presynaptic_to',
-        'target': 'postsynaptic_to'
-    },
-    'abutting-connector': {
-        'source': 'abutting',
-        'target': 'abutting'
-    },
-    'gapjunction-connector': {
-        'source': 'gapjunction_with',
-        'target': 'gapjunction_with'
-    },
-    'attachment-connector': {
-        'source': 'attached_to',
-        'target': 'close_to'
-    },
-    'spatial-connector': {
-        'source': 'attached_to',
-        'target': 'close_to'
-    }
-}
-
-LINK_RELATION_NAMES = [r['relation'] for r in LINK_TYPES]
-
 @api_view(['GET'])
 @requires_user_role(UserRole.Browse)
-def connector_types(request, project_id):
+def connector_types(request:HttpRequest, project_id) -> JsonResponse:
     """Get a list of available connector types.
 
     Returns a list of all available connector link types in a project. Each
@@ -95,7 +42,7 @@ def connector_types(request, project_id):
     """
     relation_map = get_relation_to_id_map(project_id)
 
-    def set_id(t):
+    def set_id(t) -> bool:
         relation_id = relation_map.get(t['relation'])
         # If the relation doesn't exist in the database, don't return it. Add it
         # to the log though:
@@ -110,12 +57,12 @@ def connector_types(request, project_id):
     return JsonResponse(types, safe=False)
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def graphedge_list(request, project_id=None):
+def graphedge_list(request:HttpRequest, project_id=None) -> JsonResponse:
     """ Assumes that first element of skeletonlist is pre, and second is post """
     skeletonlist = get_request_list(request.POST, 'skeletonlist[]')
     skeletonlist = map(int, skeletonlist)
     p = get_object_or_404(Project, pk=project_id)
-    edge = {}
+    edge = {} # type: Dict
     connectordata = {}
 
     qs_tc = TreenodeConnector.objects.filter(
@@ -153,7 +100,7 @@ def graphedge_list(request, project_id=None):
     return JsonResponse(result, safe=False)
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def one_to_many_synapses(request, project_id=None):
+def one_to_many_synapses(request:HttpRequest, project_id=None) -> JsonResponse:
     """ Return the list of synapses of a specific kind between one skeleton and a list of other skeletons. """
     if 'skid' not in request.POST:
         raise ValueError("No skeleton ID for 'one' provided")
@@ -163,14 +110,14 @@ def one_to_many_synapses(request, project_id=None):
     if not skids:
         raise ValueError("No skeleton IDs for 'many' provided")
 
-    relation_name = request.POST.get('relation') # expecting presynaptic_to, postsynaptic_to, or gapjunction_with
+    relation_name = request.POST.get('relation')
 
     rows = _many_to_many_synapses([skid], skids, relation_name, project_id)
     return JsonResponse(rows, safe=False)
 
 
 @requires_user_role(UserRole.Browse)
-def many_to_many_synapses(request, project_id=None):
+def many_to_many_synapses(request:HttpRequest, project_id=None) -> JsonResponse:
     """
     Return the list of synapses of a specific kind between one list of
     skeletons and a list of other skeletons.
@@ -182,24 +129,25 @@ def many_to_many_synapses(request, project_id=None):
     if not skids2:
         raise ValueError("No skeleton IDs for second list 'many' provided")
 
-    relation_name = request.POST.get('relation') # expecting presynaptic_to, postsynaptic_to, or gapjunction_with
+    relation_name = request.POST.get('relation')
 
     rows = _many_to_many_synapses(skids1, skids2, relation_name, project_id)
     return JsonResponse(rows, safe=False)
 
 
-def _many_to_many_synapses(skids1, skids2, relation_name, project_id):
+def _many_to_many_synapses(skids1, skids2, relation_name, project_id) -> Tuple:
     """
     Return all rows that connect skeletons of one set with another set with a
     specific relation.
     """
-    if relation_name not in ('postsynaptic_to', 'presynaptic_to', 'gapjunction_with'):
+    if relation_name not in LINK_RELATION_NAMES:
         raise Exception("Cannot accept a relation named '%s'" % relation_name)
 
     cursor = connection.cursor()
 
     relations = get_relation_to_id_map(project_id, cursor=cursor)
-    gapjunction_id = relations.get('gapjunction_with', -1)
+    relation_id = relations[relation_name]
+    undirected_link_ids = [relations[l] for l in UNDIRECTED_LINK_TYPES]
 
     cursor.execute('''
     SELECT tc1.connector_id, c.location_x, c.location_y, c.location_z,
@@ -211,22 +159,23 @@ def _many_to_many_synapses(skids1, skids2, relation_name, project_id):
          treenode_connector tc2,
          treenode t1,
          treenode t2,
-         relation r1,
          connector c
-    WHERE tc1.skeleton_id IN (%s)
+    WHERE tc1.skeleton_id = ANY(%(skeleton_ids_1)s::int[])
       AND tc1.connector_id = c.id
-      AND tc2.skeleton_id IN (%s)
+      AND tc2.skeleton_id = ANY(%(skeleton_ids_2)s::int[])
       AND tc1.connector_id = tc2.connector_id
-      AND tc1.relation_id = r1.id
-      AND r1.relation_name = '%s'
-      AND (tc1.relation_id != tc2.relation_id OR tc1.relation_id = %d)
+      AND tc1.relation_id = %(relation_id)s
+      AND (tc1.relation_id != tc2.relation_id
+        OR tc1.relation_id = ANY(%(undir_rel_ids)s::int[]))
       AND tc1.id != tc2.id
       AND tc1.treenode_id = t1.id
       AND tc2.treenode_id = t2.id
-    ''' % (','.join(map(str, skids1)),
-           ','.join(map(str, skids2)),
-           relation_name,
-           gapjunction_id))
+    ''', {
+        'skeleton_ids_1': skids1,
+        'skeleton_ids_2': skids2,
+        'relation_id': relation_id,
+        'undir_rel_ids': undirected_link_ids,
+    })
 
     return tuple((row[0], (row[1], row[2], row[3]),
                   row[4], row[5], row[6], row[7],
@@ -236,7 +185,7 @@ def _many_to_many_synapses(skids1, skids2, relation_name, project_id):
 
 @api_view(['POST'])
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def list_connectors(request, project_id=None):
+def list_connectors(request:HttpRequest, project_id=None) -> JsonResponse:
     """Get a collection of connectors.
 
     The `connectors` field of the returned object contains a list of all result
@@ -290,7 +239,7 @@ def list_connectors(request, project_id=None):
         defaultValue: true
         required: false
       - name: with_partners
-        description: If partner node information should be fetched
+        description: If partner node and link information should be fetched
         type: boolean
         paramType: form
         defaultValue: false
@@ -313,8 +262,8 @@ def list_connectors(request, project_id=None):
     skeleton_ids = get_request_list(request.POST, 'skeleton_ids', map_fn=int)
     tags = get_request_list(request.POST, 'tags')
     relation_type = request.POST.get('relation_type')
-    with_tags = request.POST.get('with_tags', 'true') == 'true'
-    with_partners = request.POST.get('with_partners', 'false') == 'true'
+    with_tags = get_request_bool(request.POST, 'with_tags', True)
+    with_partners = get_request_bool(request.POST, 'with_partners', False)
 
     cursor = connection.cursor()
     class_map = get_class_to_id_map(project_id, cursor=cursor)
@@ -327,7 +276,7 @@ def list_connectors(request, project_id=None):
 
     # Query connectors
     constraints = []
-    params = []
+    params = [] # type: List
 
     if skeleton_ids:
         sk_template = ",".join("(%s)" for _ in skeleton_ids)
@@ -406,15 +355,17 @@ def list_connectors(request, project_id=None):
             tags[row[0]].append(row[1])
 
         # Sort labels by name
-        for connector_id, labels in six.iteritems(tags):
+        for connector_id, labels in tags.items():
             labels.sort(key=lambda k: k.upper())
 
-    partners = defaultdict(list)
+    partners = defaultdict(list) # type: DefaultDict[Any, List]
     if connector_ids and with_partners:
         c_template = ",".join("(%s)" for _ in connector_ids)
         cursor.execute('''
             SELECT tc.connector_id, tc.id, tc.treenode_id, tc.skeleton_id,
-                tc.relation_id, tc.confidence
+                tc.relation_id, tc.confidence, tc.user_id,
+                EXTRACT(EPOCH FROM tc.creation_time),
+                EXTRACT(EPOCH FROM tc.edition_time)
             FROM treenode_connector tc
             JOIN (VALUES {}) c(id)
                 ON tc.connector_id = c.id
@@ -429,21 +380,24 @@ def list_connectors(request, project_id=None):
         "partners": partners
     }, safe=False)
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def list_connector_links(request, project_id=None):
+def list_connector_links(request:HttpRequest, project_id=None) -> JsonResponse:
     """Get connectors linked to a set of skeletons.
 
     The result data set includes information about linked connectors on a given
     input set of skeletons. These links are further constrained by relation
     type, with currently support available for: postsynaptic_to,
-    presynaptic_to, abutting, gapjunction_with.
+    presynaptic_to, abutting, gapjunction_with, tightjunction_with,
+    desmosome_with.
 
     Returned is an object containing an array of links to connectors and a set
     of tags for all connectors found (if not disabled). The link array contains
     one array per connector link with the following content: [Linked skeleton ID,
     Connector ID, Connector X, Connector Y, Connector Z, Link confidence, Link
     creator ID, Linked treenode ID, Link edit time].
+
+    A POST handler is able to accept large lists of skeleton IDs.
     ---
     parameters:
       - name: skeleton_ids
@@ -476,13 +430,14 @@ def list_connector_links(request, project_id=None):
       tags:
          type array
     """
-    skeleton_ids = get_request_list(request.GET, 'skeleton_ids', map_fn=int)
+    data = request.POST if request.method == 'POST' else request.GET
+    skeleton_ids = get_request_list(data, 'skeleton_ids', map_fn=int)
 
     if not skeleton_ids:
         raise ValueError("At least one skeleton ID required")
 
-    relation_type = request.GET.get('relation_type', 'presynaptic_to')
-    with_tags = request.GET.get('with_tags', 'true') == 'true'
+    relation_type = data.get('relation_type', 'presynaptic_to')
+    with_tags = get_request_bool(data, 'with_tags', True)
 
     cursor = connection.cursor()
     relation_map = get_relation_to_id_map(project_id, cursor=cursor)
@@ -512,7 +467,7 @@ def list_connector_links(request, project_id=None):
         links.append(l)
 
     connector_ids = [l[1] for l in links]
-    tags = defaultdict(list)
+    tags = defaultdict(list) # type: DefaultDict[Any, List]
     if connector_ids and with_tags:
         c_template = ",".join(("(%s)",) * len(connector_ids))
         cursor.execute('''
@@ -530,7 +485,7 @@ def list_connector_links(request, project_id=None):
             tags[row[0]].append(row[1])
 
         # Sort labels by name
-        for connector_id, labels in six.iteritems(tags):
+        for connector_id, labels in tags.items():
             labels.sort(key=lambda k: k.upper())
 
     return JsonResponse({
@@ -538,7 +493,7 @@ def list_connector_links(request, project_id=None):
         "tags": tags
     }, safe=False)
 
-def _connector_skeletons(connector_ids, project_id):
+def _connector_skeletons(connector_ids, project_id) -> Dict:
     """Return a dictionary of connector ID as keys and a dictionary as value
     containing two entries: 'presynaptic_to' with a skeleton ID or None,
     and 'postsynaptic_to' with a list of skeleton IDs (maybe empty).
@@ -559,7 +514,7 @@ def _connector_skeletons(connector_ids, project_id):
       AND (relation_id = %s OR relation_id = %s)
     ''' % (",".join(map(str, connector_ids)), PRE, POST))
 
-    cs = {}
+    cs = {} # type: Dict
     for row in cursor.fetchall():
         c = cs.get(row[0])
         if not c:
@@ -577,14 +532,14 @@ def _connector_skeletons(connector_ids, project_id):
     return cs
 
 @requires_user_role([UserRole.Browse, UserRole.Annotate])
-def connector_skeletons(request, project_id=None):
+def connector_skeletons(request:HttpRequest, project_id=None) -> JsonResponse:
     """ See _connector_skeletons """
     connector_ids = get_request_list(request.POST, 'connector_ids', map_fn=int)
-    cs = tuple(six.iteritems(_connector_skeletons(connector_ids, project_id)))
+    cs = tuple(_connector_skeletons(connector_ids, project_id).items())
     return JsonResponse(cs, safe=False)
 
 
-def _connector_associated_edgetimes(connector_ids, project_id):
+def _connector_associated_edgetimes(connector_ids, project_id) -> Dict:
     """ Return a dictionary of connector ID as keys and a dictionary as value
     containing two entries: 'presynaptic_to' with a skeleton ID of None,
     and 'postsynaptic_to' with a list of skeleton IDs (maybe empty) including
@@ -598,11 +553,15 @@ def _connector_associated_edgetimes(connector_ids, project_id):
     cursor.execute('''
     SELECT connector_id, relation_id, skeleton_id, treenode_id, creation_time
     FROM treenode_connector
-    WHERE connector_id IN (%s)
-      AND (relation_id = %s OR relation_id = %s)
-    ''' % (",".join(map(str, connector_ids), PRE, POST)))
+    WHERE connector_id = ANY(%(connector_ids)s::bigint[])
+      AND (relation_id = %(pre_id)s OR relation_id = %(post_id)s)
+    ''', { 
+        'connector_ids': connector_ids,
+        'pre_id': PRE,
+        'post_id': POST,
+    })
 
-    cs = {}
+    cs = {} # type: Dict
     for row in cursor.fetchall():
         c = cs.get(row[0])
         if not c:
@@ -617,7 +576,7 @@ def _connector_associated_edgetimes(connector_ids, project_id):
     return cs
 
 @requires_user_role([UserRole.Browse, UserRole.Annotate])
-def connector_associated_edgetimes(request, project_id=None):
+def connector_associated_edgetimes(request:HttpRequest, project_id=None) -> JsonResponse:
     """ See _connector_associated_edgetimes """
     connector_ids = get_request_list(request.POST, 'connector_ids', map_fn=int)
 
@@ -626,8 +585,8 @@ def connector_associated_edgetimes(request, project_id=None):
         import calendar, datetime
 
         if isinstance(obj, datetime.datetime):
-            if obj.utcoffset() is not None:
-                obj = obj - obj.utcoffset()
+            if obj.utcoffset() is not None: # type: ignore
+                obj = obj - obj.utcoffset() # type: ignore
             millis = int(
                 calendar.timegm(obj.timetuple()) * 1000 +
                 obj.microsecond / 1000
@@ -638,7 +597,7 @@ def connector_associated_edgetimes(request, project_id=None):
         project_id), safe=False, json_dumps_params={'default': default})
 
 @requires_user_role(UserRole.Annotate)
-def create_connector(request, project_id=None):
+def create_connector(request:HttpRequest, project_id=None) -> JsonResponse:
     query_parameters = {}
     default_values = {'x': 0, 'y': 0, 'z': 0, 'confidence': 5}
     for p in default_values.keys():
@@ -681,7 +640,7 @@ def create_connector(request, project_id=None):
 
 
 @requires_user_role(UserRole.Annotate)
-def delete_connector(request, project_id=None):
+def delete_connector(request:HttpRequest, project_id=None) -> JsonResponse:
     connector_id = int(request.POST.get("connector_id", 0))
     can_edit_or_fail(request.user, connector_id, 'connector')
 
@@ -695,7 +654,7 @@ def delete_connector(request, project_id=None):
             'treenodeconnector_set', 'treenodeconnector_set__relation'))
     if 1 != len(connectors):
         raise ValueError("Couldn't find exactly one connector with ID #" +
-                connector_id)
+                str(connector_id))
     connector = connectors[0]
     # TODO: Check how many queries here are generated
     partners = [{
@@ -719,7 +678,7 @@ def delete_connector(request, project_id=None):
 
 
 @requires_user_role(UserRole.Browse)
-def list_completed(request, project_id):
+def list_completed(request:HttpRequest, project_id) -> JsonResponse:
     completed_by = request.GET.get('completed_by', None)
     from_date = request.GET.get('from', None)
     to_date = request.GET.get('to', None)
@@ -736,7 +695,7 @@ def list_completed(request, project_id):
     return JsonResponse(response, safe=False)
 
 
-def _list_completed(project_id, completed_by=None, from_date=None, to_date=None):
+def _list_completed(project_id, completed_by=None, from_date=None, to_date=None) -> Tuple:
     """ Get a list of connector links that can be optionally constrained to be
     completed by a certain user in a given time frame. The returned connector
     links are by default only constrained by both sides having different
@@ -787,7 +746,7 @@ def _list_completed(project_id, completed_by=None, from_date=None, to_date=None)
 
 
 @requires_user_role(UserRole.Browse)
-def connectors_info(request, project_id):
+def connectors_info(request:HttpRequest, project_id) -> JsonResponse:
     """
     Given a list of connectors, a list of presynaptic skeletons and a list of
     postsynatic skeletons, return a list of rows, one per synaptic connection,
@@ -820,7 +779,7 @@ def connectors_info(request, project_id):
         FROM connector c
     ''']
 
-    query_params = []
+    query_params = [] # type: List
 
     # Add connector filter, if requested
     if cids:
@@ -901,7 +860,7 @@ def connectors_info(request, project_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def connector_user_info(request, project_id):
+def connector_user_info(request:HttpRequest, project_id) -> JsonResponse:
     """ Return information on a treenode connector edge.
 
     Returns a JSON array with elements representing information on the matched
@@ -978,7 +937,7 @@ def connector_user_info(request, project_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Browse])
-def connector_detail(request, project_id, connector_id):
+def connector_detail(request:HttpRequest, project_id, connector_id:Union[str,int]) -> JsonResponse:
     """Get detailed information on a connector and its partners
     ---
     models:
@@ -1064,3 +1023,159 @@ def connector_detail(request, project_id, connector_id):
         'confidence': detail[4],
         'partners': [p for p in detail[5]]
     })
+
+def get_connectors_in_bb_postgis3d(params) -> List:
+    """Return a list of connector node IDs in a bounding box.
+    """
+    limit = int(params.get('limit', 0))
+    with_locations = params.get('with_locations', False)
+    with_links = params.get('with_links', False)
+    skeleton_ids = params.get('skeleton_ids', False)
+
+    extra_joins = []
+    if skeleton_ids:
+        extra_joins.append("""
+            JOIN (
+                SELECT DISTiNCT tc2.connector_id
+                FROM treenode_connector tc2
+                JOIN UNNEST(%(skeleton_ids)s::int[]) skeleton(id)
+                    ON tc2.skeleton_id = skeleton.id
+            ) allowed_connector(id)
+                ON allowed_connector.id = c.id
+        """)
+
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT {distinct} c.id
+            {location_select}
+            {link_select}
+        FROM treenode_connector_edge tce
+        JOIN treenode_connector tc
+            ON tce.id = tc.id
+        JOIN connector c
+            ON c.id = tc.connector_id
+        {extra_joins}
+        WHERE tce.edge &&& ST_MakeLine(ARRAY[
+            ST_MakePoint(%(minx)s, %(maxy)s, %(maxz)s),
+            ST_MakePoint(%(maxx)s, %(miny)s, %(minz)s)] ::geometry[])
+        AND ST_3DDWithin(tce.edge, ST_MakePolygon(ST_MakeLine(ARRAY[
+            ST_MakePoint(%(minx)s, %(miny)s, %(halfz)s),
+            ST_MakePoint(%(maxx)s, %(miny)s, %(halfz)s),
+            ST_MakePoint(%(maxx)s, %(maxy)s, %(halfz)s),
+            ST_MakePoint(%(minx)s, %(maxy)s, %(halfz)s),
+            ST_MakePoint(%(minx)s, %(miny)s, %(halfz)s)]::geometry[])),
+            %(halfzdiff)s)
+        AND tce.project_id = %(project_id)s
+        {limit_clause}
+    """.format(**{
+        'distinct': 'DISTINCT' if not with_links else '',
+        'limit_clause': 'LIMIT {}'.format(limit) \
+                if limit > 0 else '',
+        'location_select': ', c.location_x, c.location_y, c.location_z' \
+                if with_locations else '',
+        'link_select': ', tc.skeleton_id, tc.confidence, tc.user_id, ' \
+                'tc.treenode_id, tc.creation_time, tc.edition_time, ' \
+                'tc.relation_id' \
+                if with_links else '',
+        'extra_joins': '\n'.join(extra_joins),
+    }), params)
+
+    return list(cursor.fetchall())
+
+
+@api_view(['GET', 'POST'])
+@requires_user_role(UserRole.Browse)
+def connectors_in_bounding_box(request:HttpRequest, project_id:Union[int,str]) -> JsonResponse:
+    """Get a list of all connector nodes that intersect with the passed in
+    bounding box.
+    ---
+    parameters:
+    - name: limit
+      description: |
+        Limit the number of returned nodes.
+      required: false
+      type: integer
+      defaultValue: 0
+      paramType: form
+    - name: minx
+      description: |
+        Minimum world space X coordinate
+      required: true
+      type: float
+      paramType: form
+    - name: miny
+      description: |
+        Minimum world space Y coordinate
+      required: true
+      type: float
+      paramType: form
+    - name: minz
+      description: |
+        Minimum world space Z coordinate
+      required: true
+      type: float
+      paramType: form
+    - name: maxx
+      description: |
+        Maximum world space X coordinate
+      required: true
+      type: float
+      paramType: form
+    - name: maxy
+      description: |
+        Maximum world space Y coordinate
+      required: true
+      type: float
+      paramType: form
+    - name: maxz
+      description: |
+        Maximum world space Z coordinate
+      required: true
+      type: float
+      paramType: form
+    - name: with_locations
+      description: |
+        Whether to return the location of each connector.
+      required: true
+      type: float
+      paramType: form
+    - name: with_links
+      description: |
+        Whether to return every individual link
+      required: true
+      type: float
+      paramType: form
+    - name: skeleton_ids
+      description: Skeletons linked to connectors
+      type: array
+      items:
+        type: integer
+      paramType: form
+      required: false
+    type:
+        - type: array
+          items:
+          type: integer
+          description: array of skeleton IDs or links
+          required: true
+    """
+    project_id = int(project_id)
+    data = request.GET if request.method == 'GET' else request.POST
+
+    params = {
+        'project_id': project_id,
+        'limit': data.get('limit', 0),
+        'with_locations': data.get('with_locations', False),
+        'with_links': data.get('with_links', False),
+    }
+    for p in ('minx', 'miny', 'minz', 'maxx', 'maxy', 'maxz'):
+        params[p] = float(data.get(p, 0))
+    params['halfzdiff'] = abs(params['maxz'] - params['minz']) * 0.5
+    params['halfz'] = params['minz'] + (params['maxz'] - params['minz']) * 0.5
+
+    skeleton_ids = get_request_list(data, 'skeleton_ids', map_fn=int)
+    if skeleton_ids:
+        params['skeleton_ids'] = skeleton_ids
+
+    connector_ids = get_connectors_in_bb_postgis3d(params)
+    return JsonResponse(connector_ids, safe=False)

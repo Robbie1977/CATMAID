@@ -10,10 +10,25 @@ Publications using CATMAID
 `````````````````````````````````````
 *The following publications used CATMAID for neural circuit reconstruction or other tasks. Please get in touch with us if your publication is missing.*
 
+2019
+~~~~
+
+* Jan M. Ache, Jason Polsky, Shada Alghailani, Ruchi Parekh, Patrick Breads, Martin Y. Peek, Davi D. Bock, Catherine R. von Reyn, Gwyneth M. Card. `Neural Basis for Looming Size and Velocity Encoding in the Drosophila Giant Fiber Escape Pathway <https://www.cell.com/current-biology/fulltext/S0960-9822(19)30138-1>`_, Cell Current Biology, 2019.
+
+* Tihana Jovanic, Michael Winding, Albert Cardona, James W. Truman, Marc Gershow, Marta Zlatic. `Neural Substrates of Drosophila Larval Anemotaxis <https://www.cell.com/current-biology/pdf/S0960-9822(19)30011-9.pdf>`_, Cell Current Biology, 2019.
+
 2018
 ~~~~
 
+* Luis A. Bezares-Calderón, Jürgen Berger, Sanja Jasek, Csaba Verasztó, Sara Mendes, Martin Gühmann, Rodrigo Almeda, Réza Shahidi, Gáspár Jékely. `Neural circuitry of a polycystin-mediated hydrodynamic startle response for predator avoidance <https://elifesciences.org/articles/36262>`_, eLife, 2018.
+
+* Johannes Felsenberg, Pedro F. Jacob, Thomas Walker, Oliver Barnstedt, Amelia J. Edmondson-Stait, Markus W. Pleijzier, Nils Otto, Philipp Schlegel, Nadiya Sharifi, Emmanuel Perisse, Carlas S. Smith, J. Scott Lauritzen, Marta Costa, Gregory S.X.E. Jefferis, Davi D. Bock, Scott Waddell `Integration of Parallel Opposing Memories Underlies Memory Extinction <https://www.cell.com/cell/fulltext/S0092-8674(18)31037-7>`_, Cell, 2018
+
+* Michael-John Dolan, Ghislain Belliart-Guérin, Alexander Shakeel Bates, Shahar Frechter, Aurélie Lampin-Saint-Amaux, Yoshinori Aso, Ruairí J.V. Roberts, Philipp Schlegel, Allan Wong, Adnan Hammad, Davi Bock, Gerald M. Rubin, Thomas Preat, Pierre-Yves Plaçais, Gregory S.X.E. Jefferis `Communication from Learned to Innate Olfactory Processing Centers Is Required for Memory Retrieval in Drosophila <https://www.cell.com/neuron/fulltext/S0896-6273(18)30742-6>`_, Neuron, 2018
+
 * Tatsuya C. Murakami, Tomoyuki Mano, Shu Saikawa, Shuhei A. Horiguchi, Daichi Shigeta, Kousuke Baba, Hiroshi Sekiya, Yoshihiro Shimizu, Kenji F. Tanaka, Hiroshi Kiyonari, Masamitsu Iino, Hideki Mochizuki, Kazuki Tainaka & Hiroki R. Ueda. `A three-dimensional single-cell-resolution whole-brain atlas using CUBIC-X expansion microscopy and tissue clearing <https://www.nature.com/articles/s41593-018-0109-1>`_, Nature Neuroscience, 2018.
+
+* Zhihao Zheng, J. Scott Lauritzen, Eric Perlman, Camenzind G. Robinson, Matthew Nichols, Daniel Milkie, Omar Torrens, John Price, Corey,  B. Fisher, Nadiya Sharifi, Steven A. Calle-Schuler, Lucia Kmecova, Iqbal J. Ali, Bill Karsh, Eric T. Trautman, John A. Bogovic, Philipp Hanslovsky, Gregory S.X.E. Jefferis, Michael Kazhdan, Khaled Khairy, Stephan Saalfeld, Richard D. Fetter, Davi D. Bock. `A Complete Electron Microscopy Volume of the Brain of Adult Drosophila melanogaster <https://www.cell.com/cell/abstract/S0092-8674(18)30787-6>`_, Cell, 2018.
 
 2017
 ~~~~

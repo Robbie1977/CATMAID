@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.http.request import QueryDict
-from catmaid.control.common import get_request_list
+from catmaid.control.common import get_request_bool, get_request_list
 from catmaid.models import Project, Class, Relation, ClassInstance, \
     ClassInstanceClassInstance
-from catmaid.control.neuron_annotations import delete_annotation_if_unused
+from catmaid.control.annotation import delete_annotation_if_unused
 from catmaid.tests.common import CatmaidTestCase
 
 
 class InternalApiTestsNoDB(TestCase):
 
     def test_request_list_parsing(self):
-        q = QueryDict('a=1&a=2&a=3')
-        self.assertEqual(get_request_list(q, 'a'), ['1', '2', '3'])
-        self.assertEqual(get_request_list(q, 'a', map_fn=int), [1, 2, 3])
+        q = QueryDict('a=0&a=1&a=2&a=3')
+        self.assertEqual(get_request_list(q, 'a'), ['0', '1', '2', '3'])
+        self.assertEqual(get_request_list(q, 'a', map_fn=int), [0, 1, 2, 3])
         self.assertEqual(get_request_list(q, 'b'), None)
 
-        q2 = QueryDict('a[0]=1&a[1]=2&a[2]=3&a=4')
-        self.assertEqual(get_request_list(q2, 'a'), ['1', '2', '3'])
-        self.assertEqual(get_request_list(q2, 'a', map_fn=int), [1, 2, 3])
+        q2 = QueryDict('a[0]=0&a[1]=1&a[2]=2&a[3]=3&a=4')
+        self.assertEqual(get_request_list(q2, 'a'), ['0', '1', '2', '3'])
+        self.assertEqual(get_request_list(q2, 'a', map_fn=int), [0, 1, 2, 3])
         self.assertEqual(get_request_list(q2, 'b'), None)
 
         # Test list of lists [[1,2],[3,4]]
@@ -34,6 +33,28 @@ class InternalApiTestsNoDB(TestCase):
         q4 = QueryDict('a[0][0]=1&a[0][1]=2&a[0][2]=3')
         self.assertEqual(get_request_list(q4, 'a'), [['1', '2', '3']])
         self.assertEqual(get_request_list(q4, 'a', map_fn=int), [[1, 2, 3]])
+
+        # Test list with single list [1,2,3]
+        q5 = QueryDict('a[]=1,2,3')
+        self.assertEqual(get_request_list(q5, 'a'), ['1', '2', '3'])
+        self.assertEqual(get_request_list(q5, 'a', map_fn=int), [1, 2, 3])
+
+
+    def test_request_bool_parsing(self):
+        q1 = QueryDict('a=true&b=True&c=TRUE')
+        self.assertEqual(get_request_bool(q1, 'a', False), True)
+        self.assertEqual(get_request_bool(q1, 'b', False), True)
+        self.assertEqual(get_request_bool(q1, 'c', False), True)
+
+        q2 = QueryDict('a=false&b=False&c=FALSE')
+        self.assertEqual(get_request_bool(q2, 'a', True), False)
+        self.assertEqual(get_request_bool(q2, 'b', True), False)
+        self.assertEqual(get_request_bool(q2, 'c', True), False)
+
+        q3 = QueryDict()
+        self.assertEqual(get_request_bool(q3, 'a', True), True)
+        self.assertEqual(get_request_bool(q3, 'b', False), False)
+
 
 class InternalApiTests(CatmaidTestCase):
     fixtures = ['catmaid_testdata']

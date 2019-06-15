@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
-import six
 
 from django.contrib.auth.models import Permission
 from django.db import connection, transaction
@@ -14,7 +12,7 @@ from guardian.utils import get_anonymous_user
 from guardian.management import create_anonymous_user
 
 from catmaid.control.project import validate_project_setup
-from catmaid.control.neuron_annotations import _annotate_entities
+from catmaid.control.annotation import _annotate_entities
 from catmaid.fields import Double3D, Integer3D
 from catmaid.models import Project, Stack, ProjectStack, StackMirror
 from catmaid.models import ClassInstance, Log
@@ -107,7 +105,6 @@ class InsertionTest(TestCase):
         s.title = "Example Stack"
         s.dimension = Integer3D(x=2048, y=1536, z=460)
         s.resolution = Double3D(x=5.0001, y=5.0002, z=9.0003)
-        s.num_zoom_levels = -1
         s.save()
 
         sm = StackMirror()
@@ -128,7 +125,7 @@ class InsertionTest(TestCase):
         the custom psycopg2 driver is needed for.)
         """
         p = self.insert_project()
-        self.assertIsInstance(p.id, six.integer_types)
+        self.assertIsInstance(p.id, int)
 
     def test_stack_insertion(self):
         p = self.insert_project()
@@ -232,6 +229,19 @@ class ViewPageTests(TestCase):
             assign_perm('can_browse', user, p)
             assign_perm('can_annotate', user, p)
 
+    def fake_admin_authentication(self, username='test2', password='test'):
+        user = User.objects.get(username=username)
+        user.is_staff = True
+        user.is_superuser = True
+        user.save()
+
+        self.client.login(username=username, password=password)
+
+        # Assign the new user permissions to browse and annotate projects
+        p = Project.objects.get(pk=self.test_project_id)
+        assign_perm('can_browse', user, p)
+        assign_perm('can_annotate', user, p)
+
     def test_authentication(self):
         # Try to access the password change view without logging in
         response = self.client.get('/user/password_change/')
@@ -295,10 +305,14 @@ class ViewPageTests(TestCase):
             {'can_administer': [],
              'add_project': [],
              'can_annotate': [3],
+             'can_annotate_with_token': [],
              'change_project': [],
              'can_browse': [3],
              'can_import': [],
-             'delete_project': []}, [u'test1']]
+             'can_queue_compute_task': [],
+             'delete_project': [],
+             'view_project': [],
+            }, [u'test1']]
         self.assertEqual(expected_result, parsed_response)
 
 
@@ -307,6 +321,74 @@ class ViewPageTests(TestCase):
         url = '/'
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_user_list_with_passwords_regular_user(self):
+        self.fake_authentication()
+        response = self.client.get('/user-list', {
+            'with_passwords': True,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+
+        self.assertTrue('error' in parsed_response)
+        self.assertTrue('type' in parsed_response)
+        self.assertEqual(parsed_response['type'], 'PermissionError')
+
+    def test_user_list_with_passwords_admin_user(self):
+        self.fake_admin_authentication()
+        response = self.client.get('/user-list', {
+            'with_passwords': True,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+
+        self.assertFalse('error' in parsed_response)
+
+        expected_result = [
+            {
+                'first_name': 'Admin',
+                'last_name': 'Superuser',
+                'color': [1.0, 1.0, 0.0],
+                'full_name': 'Admin Superuser',
+                'login': 'admin',
+                'password': 'pbkdf2_sha256$12000$CqdO6wRdSSxH$c57xXXPO8k65prBMrHTvjj/inanxDnbdoaeDIeWWrik=',
+                'id': 4
+            }, {
+                'first_name': 'Test',
+                'last_name': 'User 0',
+                'color': [0.0, 0.0, 1.0],
+                'full_name': 'Test User 0',
+                'login': 'test0',
+                'password': 'pbkdf2_sha256$12000$CqdO6wRdSSxH$c57xXXPO8k65prBMrHTvjj/inanxDnbdoaeDIeWWrik=',
+                'id': 5
+            }, {
+                'first_name': 'Test',
+                'last_name': 'User 1',
+                'color': [1.0, 0.0, 1.0],
+                'full_name': 'Test User 1',
+                'login': 'test1',
+                'password': 'pbkdf2_sha256$12000$CqdO6wRdSSxH$c57xXXPO8k65prBMrHTvjj/inanxDnbdoaeDIeWWrik=',
+                'id': 2
+            },
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        parsed_response = json.loads(response.content.decode('utf-8'))
+
+        for u in expected_result:
+            self.assertIn(u, parsed_response)
+
+        # The anonymous user is created by Guardian, we don't know its ID. A
+        # second test user (test2) has a run-time updated password, which we
+        # don't know and therefore we skip it.
+        self.assertEqual(len(expected_result) + 2, len(parsed_response))
+        found_anon_user = False
+        for u in parsed_response:
+            if u['login'] == 'AnonymousUser':
+                found_anon_user = True
+        self.assertTrue(found_anon_user)
 
     def test_user_list(self):
         self.fake_authentication()
@@ -379,9 +461,9 @@ class ViewPageTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         expected_result = [{'reviewer_id': int(r), 'accept_after': t}
-                for r,t in six.iteritems(whitelist)]
+                for r,t in whitelist.items()]
         parsed_response = json.loads(response.content.decode('utf-8'))
-        six.assertCountEqual(self, parsed_response, expected_result)
+        self.assertCountEqual(parsed_response, expected_result)
         for pr in parsed_response:
             rid = pr['reviewer_id']
             self.assertEqual(whitelist[str(rid)], pr['accept_after'])
@@ -406,8 +488,8 @@ class ViewPageTests(TestCase):
                 [],
                 []]
         self.assertEqual(len(parsed_response), len(expected_response))
-        six.assertCountEqual(self, parsed_response[0], expected_response[0])
-        six.assertCountEqual(self, parsed_response[1], expected_response[1])
+        self.assertCountEqual(parsed_response[0], expected_response[0])
+        self.assertCountEqual(parsed_response[1], expected_response[1])
         self.assertEqual(parsed_response[2], expected_response[2])
         self.assertEqual(parsed_response[3], expected_response[3])
         self.assertEqual(parsed_response[4], expected_response[4])
@@ -438,8 +520,8 @@ class ViewPageTests(TestCase):
                 [],
                 [[new_annotation_link_id]]]
         self.assertEqual(len(parsed_response), len(expected_response))
-        six.assertCountEqual(self, parsed_response[0], expected_response[0])
-        six.assertCountEqual(self, parsed_response[1], expected_response[1])
+        self.assertCountEqual(parsed_response[0], expected_response[0])
+        self.assertCountEqual(parsed_response[1], expected_response[1])
         self.assertEqual(parsed_response[2], expected_response[2])
         self.assertEqual(parsed_response[3], expected_response[3])
         self.assertEqual(parsed_response[4], expected_response[4])
@@ -461,8 +543,8 @@ class ViewPageTests(TestCase):
                 [[377, 5, 356, 5, 285, 235, 1, 0],
                  [409, 5, 421, 5, 415, 235, 1, 0]],
                 {"uncertain end": [403]}]
-        six.assertCountEqual(self, parsed_response[0], expected_response[0])
-        six.assertCountEqual(self, parsed_response[1], expected_response[1])
+        self.assertCountEqual(parsed_response[0], expected_response[0])
+        self.assertCountEqual(parsed_response[1], expected_response[1])
         self.assertEqual(parsed_response[2], expected_response[2])
 
     def test_export_compact_arbor_with_minutes(self):
@@ -483,11 +565,11 @@ class ViewPageTests(TestCase):
                  [409, 5, 421, 5, 415, 235, 1, 0]],
                 {"uncertain end": [403]},
                 {"21951837": [377, 403, 405, 407, 409]}]
-        six.assertCountEqual(self, parsed_response[0], expected_response[0])
-        six.assertCountEqual(self, parsed_response[1], expected_response[1])
+        self.assertCountEqual(parsed_response[0], expected_response[0])
+        self.assertCountEqual(parsed_response[1], expected_response[1])
         self.assertEqual(parsed_response[2], expected_response[2])
-        for k, v in six.iteritems(expected_response[3]):
-            six.assertCountEqual(self, parsed_response[3][k], v)
+        for k, v in expected_response[3].items():
+            self.assertCountEqual(parsed_response[3][k], v)
 
 
 class TreenodeTests(TestCase):

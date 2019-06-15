@@ -93,6 +93,8 @@
           {title: 'Incoming connectors', value: "postsynaptic_to"},
           {title: 'Outgoing connectors', value: "presynaptic_to"},
           {title: 'Gap junction connectors', value: "gapjunction_with"},
+          {title: 'Tight junction connectors', value: "tightjunction_with"},
+          {title: 'Desmosome connectors', value: "desmosome_with"},
           {title: 'Abutting connectors', value: "abutting"},
           {title: 'Attachment connectors', value: "attached_to"}],
           "presynaptic_to");
@@ -180,7 +182,7 @@
               return;
             }
 
-            CATMAID.fetch(project.id +  "/connectors/links/", "GET", params)
+            CATMAID.fetch(project.id +  "/connectors/links/", "POST", params)
               .then(function(result) {
                 return self.filterResults(result);
               })
@@ -344,14 +346,24 @@
     var header = this.connectorTable.columns().header().map(function(h) {
       return $(h).text();
     });
-    var connectorRows = this.connectorTable.rows({"order": "current"}).data();
+    let nCols = header.length;
+    let connectorRows = this.connectorTable.cells({"order": "current"})
+        .render('display')
+        .toArray()
+        .reduce((o, c, i) => {
+          if (i % nCols === 0) {
+            o.push([c]);
+          } else {
+            o[o.length - 1].push(c);
+          }
+          return o;
+        }, []);
     var csv = header.join(',') + '\n' + connectorRows.map(function(row) {
       return row.join(',');
     }).join('\n');
     var blob = new Blob([csv], {type: 'text/plain'});
-    var skeletonIds = this.skeletonSource.getSelectedSkeletons().join('-');
-    saveAs(blob, "catmaid-connectors-" + relation + "-skeleton-" +
-        skeletonIds + ".csv");
+    var skeletonIds = this.skeletonSource.getSelectedSkeletons();
+    saveAs(blob, `catmaid-connectors-${relation}-${skeletonIds.length}-skeletons.csv`);
   };
 
   /**

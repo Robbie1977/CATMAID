@@ -14,7 +14,7 @@
     this.view = document.createElement( "div" );
     this.view.className = "LayerControl";
     this.view.id = "LayerControl" + stackViewer.id;
-    this.view.style.zIndex = 8;
+    this.view.style.zIndex = 6;
 
     stackViewer.getView().appendChild( this.view );
   };
@@ -215,6 +215,13 @@
               if (setting.range && 2 === setting.range.length) {
                 input.attr('min', setting.range[0]);
                 input.attr('max', setting.range[1]);
+              } else {
+                if (setting.min !== undefined) {
+                  input.attr('min', setting.min);
+                }
+                if (setting.max !== undefined) {
+                  input.attr('max', setting.max);
+                }
               }
               if (setting.step) {
                 input.attr('step', setting.step);
@@ -230,7 +237,7 @@
               if ('checkbox' === setting.type) {
                 label.prepend(input);
               } else {
-                label.append(input);
+                settingElement.append(input);
               }
 
             } else if ('select' === setting.type) {
@@ -245,7 +252,7 @@
               });
               select.val(setting.value);
               select.addClass('layerSetting');
-              label.append(select);
+              settingElement.append(select);
             } else if ('buttons' === setting.type) {
               var controls = $('<span />')
                 .addClass('layerSetting');
@@ -256,7 +263,7 @@
                   .append(b.name);
                 this.append(button);
               }, controls);
-              label.append(controls);
+              settingElement.append(controls);
             }
             layerSettings.append(settingElement);
           }
@@ -298,8 +305,7 @@
           stackViewer.redraw();
         });
 
-        blendLabel.append(blendSelect);
-        container.append($('<div class="setting"/>').append(blendLabel));
+        container.append($('<div class="setting"/>').append(blendLabel).append(blendSelect));
       }
 
       // Filters
@@ -330,7 +336,7 @@
         });
 
         filterLabel.append(filterSelect).append(filterAdd);
-        container.append($('<div class="setting"/>').append(filterLabel));
+        container.append($('<div class="setting"/>').append(filterLabel).append(filterSelect).append(filterAdd));
 
         var filters = layer.getFilters();
         filters.forEach(function (filter) {

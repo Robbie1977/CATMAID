@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
-import six
+
+from operator import itemgetter
 
 from django.shortcuts import get_object_or_404
 
@@ -18,7 +18,7 @@ from .common import CatmaidApiTestCase
 class TreenodesApiTests(CatmaidApiTestCase):
     def test_list_treenode_table_empty(self):
         self.fake_authentication()
-        response = self.client.post('/%d/treenode/table/%d/content' % \
+        response = self.client.get('/%d/skeletons/%d/node-overview' % \
                                     (self.test_project_id, 0))
         self.assertEqual(response.status_code, 200)
         expected_result = [[], [], []]
@@ -350,8 +350,8 @@ class TreenodesApiTests(CatmaidApiTestCase):
                 [[377, 356, 1, 6730.0, 2700.0, 0.0],
                  [409, 421, 1, 6260.0, 3990.0, 0.0]],
                 {"uncertain end": [403]}]
-        six.assertCountEqual(self, parsed_response[0], expected_response[0])
-        six.assertCountEqual(self, parsed_response[1], expected_response[1])
+        self.assertCountEqual(parsed_response[0], expected_response[0])
+        self.assertCountEqual(parsed_response[1], expected_response[1])
         self.assertEqual(parsed_response[2], expected_response[2])
 
 
@@ -858,15 +858,15 @@ class TreenodesApiTests(CatmaidApiTestCase):
 
         # The response has updated timetamps (since we updated nodes), we have
         # to compare fields manually to ignore them
-        for k,v in six.iteritems(expected_response):
+        for k,v in expected_response.items():
             self.assertIn(k, parsed_response)
             if 'updated_nodes' == k:
                 continue
             self.assertEqual(v, parsed_response.get(k))
-        for k,v in six.iteritems(expected_response['updated_nodes']):
+        for k,v in expected_response['updated_nodes'].items():
             self.assertIn(k, parsed_response['updated_nodes'])
             result_node = parsed_response['updated_nodes'][k]
-            for p,pv in six.iteritems(v):
+            for p,pv in v.items():
                 self.assertIn(p, result_node)
                 result_value = result_node.get(p)
                 if 'edition_time' == p:
@@ -1042,8 +1042,8 @@ class TreenodesApiTests(CatmaidApiTestCase):
 
     def test_list_treenode_table_simple(self):
         self.fake_authentication()
-        response = self.client.post(
-                '/%d/treenode/table/%d/content' % (self.test_project_id, 235))
+        response = self.client.get(
+                '/%d/skeletons/%d/node-overview' % (self.test_project_id, 235))
         self.assertEqual(response.status_code, 200)
         expected_result = [[
                 [417, 415, 5, 4990.0, 4200.0, 0.0, -1.0, 3, 1323093096.0],
@@ -1083,3 +1083,142 @@ class TreenodesApiTests(CatmaidApiTestCase):
             self.assertEqual(expected, parsed)
         self.assertEqual(expected_result[1], parsed_response[1])
         self.assertEqual(expected_result[2], parsed_response[2])
+
+    def test_compact_detail_simple(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'treenode_ids': [261, 417, 415]
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [415, 289, 5810.0, 3950.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [417, 415, 4990.0, 4200.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))
+
+    def test_compact_detail_label_names_and_treenode_set(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'treenode_ids': [261, 417, 415],
+                    'label_names': ['TODO']
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))
+
+    def test_compact_detail_label_names(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'label_names': ['TODO']
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [349, 347, 3580.0, 3350.0, 252.0, 5, -1.0, 1, 1323093096.955, 3]
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))
+
+    def test_compact_detail_label_id_and_treenode_set(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'treenode_ids': [261, 417, 415],
+                    'label_ids': [351]
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))
+
+    def test_compact_detail_label_ids(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'label_ids': [351]
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [349, 347, 3580.0, 3350.0, 252.0, 5, -1.0, 1, 1323093096.955, 3]
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))
+
+    def test_compact_detail_skeleton_ids(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'skeleton_ids': [235]
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [237, None, 1065.0, 3035.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [239, 237, 1135.0, 2800.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [241, 239, 1340.0, 2660.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [243, 241, 1780.0, 2570.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [245, 243, 1970.0, 2595.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [247, 245, 2610.0, 2700.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [249, 247, 2815.0, 2590.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [251, 249, 3380.0, 2330.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [253, 251, 3685.0, 2160.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [255, 253, 3850.0, 1790.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [257, 255, 3825.0, 1480.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [259, 257, 3445.0, 1385.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [263, 253, 3915.0, 2105.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [265, 263, 4570.0, 2125.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [267, 265, 5400.0, 2200.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [269, 265, 4820.0, 1900.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [271, 269, 5090.0, 1675.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [273, 271, 5265.0, 1610.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [275, 273, 5800.0, 1560.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [277, 275, 6090.0, 1550.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [279, 267, 5530.0, 2465.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [281, 279, 5675.0, 2635.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [283, 281, 5985.0, 2745.0, 0.0, 5, -1.0, 235, 1323957096.955, 3],
+                [285, 283, 6100.0, 2980.0, 0.0, 5, -1.0, 235, 1323006696.955, 3],
+                [289, 285, 6210.0, 3480.0, 0.0, 5, -1.0, 235, 1320587496.955, 3],
+                [415, 289, 5810.0, 3950.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+                [417, 415, 4990.0, 4200.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))
+
+    def test_compact_detail_skeleton_ids_and_label(self):
+        self.fake_authentication()
+        response = self.client.post(
+                '/{}/treenodes/compact-detail'.format(self.test_project_id),
+                {
+                    'skeleton_ids': [235],
+                    'label_names': ['TODO']
+                })
+        self.assertEqual(response.status_code, 200)
+        expected_result = [
+                [261, 259, 2820.0, 1345.0, 0.0, 5, -1.0, 235, 1323093096.955, 3],
+        ]
+        parsed_response = json.loads(response.content.decode('utf-8'))
+        self.assertEqual(expected_result,
+                sorted(parsed_response, key=itemgetter(0)))

@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 from django.db import models, migrations
 from datetime import datetime
@@ -3619,7 +3618,7 @@ initial_state_operations = [
         fields=[
             ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
             ('translation', catmaid.fields.Double3DField(default=(0, 0, 0))),
-            ('orientation', models.IntegerField(default=0, choices=[(0, b'xy'), (1, b'xz'), (2, b'zy')])),
+            ('orientation', models.IntegerField(default=0, choices=[(0, 'xy'), (1, 'xz'), (2, 'zy')])),
             ('project', models.ForeignKey(to='catmaid.Project', on_delete=models.CASCADE)),
         ],
         options={
@@ -3787,7 +3786,7 @@ initial_state_operations = [
             ('creation_time', models.DateTimeField(default=timezone.now)),
             ('edition_time', models.DateTimeField(default=timezone.now)),
             ('location_coordinate', models.FloatField()),
-            ('orientation', models.SmallIntegerField(choices=[(0, b'z'), (1, b'y'), (2, b'x')])),
+            ('orientation', models.SmallIntegerField(choices=[(0, 'z'), (1, 'y'), (2, 'x')])),
         ],
         options={
             'db_table': 'suppressed_virtual_treenode',
@@ -3898,7 +3897,7 @@ initial_state_operations = [
             ('show_tracing_tool', models.BooleanField(default=False)),
             ('show_ontology_tool', models.BooleanField(default=False)),
             ('show_roi_tool', models.BooleanField(default=False)),
-            ('color', catmaid.fields.RGBAField(default=catmaid.control.user.distinct_user_color)),
+            ('color', catmaid.fields.RGBAField(default=catmaid.models.distinct_user_color)),
             ('user', models.OneToOneField(to=settings.AUTH_USER_MODEL, on_delete=models.CASCADE)),
         ],
         options={
@@ -4097,6 +4096,11 @@ initial_state_operations = [
         name='clientdata',
         unique_together=set([('datastore', 'key', 'project', 'user')]),
     ),
+    migrations.AlterField(
+        model_name='clientdatastore',
+        name='name',
+        field=models.CharField(max_length=255, unique=True, validators=[django.core.validators.RegexValidator('^[\\w-]+$', 'Only alphanumeric characters and hyphens are allowed.')]),
+        ),
     migrations.AddField(
         model_name='classinstanceclassinstance',
         name='project',
@@ -4286,12 +4290,17 @@ def add_initial_data(apps, schema_editor):
             'representation returned by configured URLs.')
 
     # Create default data views
-    list_view = DataView.objects.create(title='Project list',
-            data_view_type=project_list, config='{}', is_default=False,
-            position=0, comment='')
-    table_view = DataView.objects.create(title='Project table with images',
-            data_view_type=project_table, config='{"sample_images":true}',
-            is_default=True, position=1, comment='')
+    if settings.CREATE_DEFAULT_DATAVIEWS:
+        list_view = DataView.objects.create(title='Project list',
+                data_view_type=project_list, config='{}', is_default=False,
+                position=0, comment='')
+        table_view = DataView.objects.create(title='Project table with images',
+                data_view_type=project_table, config='{"sample_images":true}',
+                is_default=True, position=1, comment='')
+
+    # Register composite type handlers now that the types exist in Postgres.
+    catmaid.fields.composite_type_created.send(sender=catmaid.fields.Integer3DField, db_type='integer3d')
+
 
 class Migration(migrations.Migration):
     """Migrate the database to the state of the last South migration"""

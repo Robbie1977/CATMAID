@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 from sqlalchemy import create_engine
 from sqlalchemy import Table, Colum, Integer, String, MetaData, ForeignKey
@@ -66,7 +65,7 @@ Session = sessionmaker(bind=engine)
 session = Session()
 res = session.query(User)
 for ob in res:
-    print ob
+    print(ob)
 session.close()
 
 # adding many to many relationships with data need the association object pattern

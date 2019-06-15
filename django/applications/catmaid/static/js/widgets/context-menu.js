@@ -97,7 +97,7 @@
     }
 
     /**
-     * Show the context menu at the current mouse location.
+     * Show the context menu at the current pointer location.
      *
      * @param {Object} mouseEvent A CATMAID UI generated mouse event
      */
@@ -112,9 +112,11 @@
       var mouse = CATMAID.ui.getMouse(mouseEvent);
       menuX = mouse.x;
       menuY = mouse.y;
-      setTimeout(toggleContextMenu, 10);
+      setTimeout(this._boundToggleContextMenu, 10);
       return true;
     };
+
+    this._boundOnClick = this.onClick.bind(this);
 
     /**
      * Make context menu visible.
@@ -124,6 +126,8 @@
      *                                     recorded last.
      */
     this.show = function(useCurrentLocation) {
+      CATMAID.ui.registerEvent("onpointerup", this._boundOnClick);
+      CATMAID.ui.catchEvents();
       document.body.appendChild(wrapper);
       if (useCurrentLocation) {
         var mouse = CATMAID.UI.getLastMouse();
@@ -150,6 +154,8 @@
      * Hide the currently displayed context menu.
      */
     this.hide = function(selected) {
+      CATMAID.ui.removeEvent("onpointerup", this._boundOnClick);
+      CATMAID.ui.releaseEvents();
       wrapper.style.display = "none";
       menuVisible = false;
       document.body.removeChild(wrapper);
@@ -174,11 +180,13 @@
         this.show(useCorrentLocation);
       }
     };
+
+    this._boundToggleContextMenu = this.toggleContextMenu.bind(this);
   };
 
   /**
    * Will create a new context menu once the DOM is fully loaded and binds its
-   * onclick handler to the UI's onmouseup event. If no contextMenu is provided,
+   * onclick handler to the UI's onpointerup event. If no contextMenu is provided,
    * a new one is created and returned as a promise result
    */
   ContextMenu.registerGlobally = function(contextMenu) {
@@ -188,7 +196,7 @@
         contextMenu = contextMenu || new ContextMenu();
         // Liste to mouse down events generated through CATMAID's event catcher
         if (CATMAID.ui) {
-          CATMAID.ui.registerEvent("onmouseup", contextMenu.onClick.bind(contextMenu));
+          CATMAID.ui.registerEvent("onpointerup", contextMenu.onClick.bind(contextMenu));
         } else {
           CATMAID.warn("UI not initialized yet");
         }

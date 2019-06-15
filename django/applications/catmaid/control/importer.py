@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
-import glob
-import os.path
-import yaml
-import urllib
-import requests
-import six
 
 from collections import OrderedDict, defaultdict
+import glob
+import json
+import os.path
+import requests
+from typing import Any, List, DefaultDict, Dict, Tuple
+import urllib
+import yaml
+
 
 from django import forms
 from django.db import connection
@@ -18,6 +18,7 @@ from django.contrib.auth.models import User, Group, Permission
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render_to_response
 from django.utils.translation import ugettext as _
 
@@ -28,10 +29,10 @@ from guardian.shortcuts import get_perms_for_model, assign_perm
 
 from catmaid.models import (BrokenSlice, Class, Relation, ClassClass,
         ClassInstance, Project, ClassInstanceClassInstance, Stack, StackGroup,
-        StackStackGroup, ProjectStack, StackClassInstance, StackGroupRelation,
+        StackStackGroup, ProjectStack, StackClassInstance, StackGroupClassInstance, StackGroupRelation,
         StackMirror, TILE_SOURCE_TYPES)
 from catmaid.fields import Double3D
-from catmaid.control.common import urljoin
+from catmaid.control.common import urljoin, is_valid_host
 from catmaid.control.classification import get_classification_links_qs, \
         link_existing_classification, ClassInstanceClassInstanceProxy
 
@@ -43,28 +44,6 @@ TEMPLATES = {"pathsettings": "catmaid/import/setup_path.html",
 info_file_name = "project.yaml"
 datafolder_setting = "CATMAID_IMPORT_PATH"
 base_url_setting = "IMPORTER_DEFAULT_IMAGE_BASE"
-
-def is_reachable(url, auth=None):
-    try:
-        r = requests.head(url, auth=auth)
-        if r.status_code >= 200 and r.status_code < 400:
-            return (True, 'URL accessible')
-        else:
-            return (False, r.reason)
-    except requests.ConnectionError:
-        return (False, 'No route to host')
-
-def is_invalid_host(host, auth=None):
-    host = host.strip()
-    if 0 == len(host):
-        return 'No URL provided'
-    if '://' not in host:
-        return 'URL is missing protocol (http://...)'
-    reachable, reason = is_reachable(host, auth)
-    if not reachable:
-        return 'URL not reachable: {}'.format(reason)
-
-    return None
 
 class UserProxy(User):
     """ A proxy class for the user model as we want to be able to call
@@ -156,8 +135,7 @@ class PreStack(object):
         self.resolution = info_object['resolution']
         self.metadata = info_object['metadata'] if 'metadata' in info_object else ""
 
-        # Init with -1 if not available and override later, if needed
-        self.num_zoom_levels = info_object.get('zoomlevels', -1)
+        self.downsample_factors = info_object.get('downsample_factors')
 
         self.comment = info_object.get('comment')
         self.attribution = info_object.get('attribution')
@@ -177,7 +155,7 @@ class PreStack(object):
         if not Double3D.tuple_pattern.match(self.project_translation):
             raise ValueError("Couldn't read translation value")
         # Collect stack group information
-        self.stackgroups = []
+        self.stackgroups = [] # type: List
         if 'stackgroups' in info_object:
             for stackgroup in info_object['stackgroups']:
                 self.stackgroups.append(PreStackGroup(stackgroup))
@@ -190,7 +168,7 @@ class PreStack(object):
         # Don't be considered known by default
         self.already_known = already_known
 
-    def equals(self, stack):
+    def equals(self, stack) -> bool:
         """Two PreStack objects are equal if their title matches and they have
         equal sets of image bases of their PreMirror instances.
         """
@@ -218,7 +196,7 @@ class PreProject:
         # Read out data
         self.title = p['title']
 
-        self.stacks = []
+        self.stacks = [] # type: List
         self.has_been_imported = False
         for s in p.get('stacks', []):
             self.stacks.append(PreStack(s, project_url, data_folder))
@@ -233,21 +211,21 @@ class PreProject:
         self.classification = p.get('classification', [])
 
         # Collect stack group information, if available
-        self.stackgroups = []
+        self.stackgroups = [] # type: List
         for sg in p.get('stackgroups', []):
             self.stackgroups.append(PreStackGroup(sg))
 
-    def set_known_pid(self, pid):
+    def set_known_pid(self, pid) -> None:
         self.already_known = pid != None
         self.already_known_pid = pid
 
-    def imports_stack(self, stack):
+    def imports_stack(self, stack) -> bool:
         for s in self.stacks:
             if s.equals(stack):
                 return True
         return False
 
-    def merge_with(self, other):
+    def merge_with(self, other) -> None:
         """Copy properties from other project
         """
         if self.has_been_imported:
@@ -263,7 +241,7 @@ class PreProject:
         self.classification.extend(other.classification)
         self.stackgroups.extend(other.stackgroups)
 
-def check_http_accessibility(image_base, file_extension, auth=None):
+def check_http_accessibility(image_base:str, file_extension:str, auth=None) -> bool:
     """ Returns true if data below this image base can be accessed through HTTP.
     """
     slice_zero_url = urljoin(image_base, "0")
@@ -274,12 +252,12 @@ def check_http_accessibility(image_base, file_extension, auth=None):
         return False
     return response.status_code == 200
 
-def find_project_folders(image_base, path, filter_term, depth=1):
+def find_project_folders(image_base:str, path:str, filter_term) -> Tuple[List, Dict[str, Any], List]:
     """ Finds projects in a folder structure by testing for the presence of an
     info/project YAML file.
     """
     index = []
-    projects = {}
+    projects = {} # type: Dict
     not_readable = []
     for current_file in glob.glob( os.path.join(path, filter_term) ):
         if os.path.isdir(current_file):
@@ -297,7 +275,7 @@ def find_project_folders(image_base, path, filter_term, depth=1):
                         url_dir = url_dir.replace("\\", "/")
                     project_url = urljoin(image_base, url_dir)
                     # Expect a YAML file
-                    yaml_data = yaml.load_all(open(info_file))
+                    yaml_data = yaml.load_all(open(info_file), Loader=yaml.FullLoader)
                     for project_yaml_data in yaml_data:
                         project = PreProject(project_yaml_data, project_url,
                                 short_name)
@@ -311,13 +289,26 @@ def find_project_folders(image_base, path, filter_term, depth=1):
                         index.append((key, short_name))
                 except Exception as e:
                     not_readable.append( (info_file, e) )
-            elif depth > 1:
-                # Recurse in subdir if requested
-                index = index + find_files( current_file, depth - 1)
     return (index, projects, not_readable)
 
+
+def get_projects_from_raw_data(data, filter_term, base_url=None) -> Tuple[List, Dict, List]: # FIXME: filter_term is unused
+    index = []
+    projects = {}
+    not_readable = [] # type: List
+
+    for p in data:
+        project = PreProject(p, base_url, None)
+        short_name = project.title
+        key = "{}-{}".format('File', short_name)
+        projects[key] = project
+        index.append((key, short_name))
+
+    return (index, projects, not_readable)
+
+
 def get_projects_from_url(url, filter_term, headers=None, auth=None,
-        base_url=None, merge_same=True):
+        base_url=None, merge_same=True) -> Tuple[List, Dict, List]: # FIXME: filter_term is unused.
     if not url:
         raise ValueError("No URL provided")
     if auth and len(auth) != 2:
@@ -329,7 +320,7 @@ def get_projects_from_url(url, filter_term, headers=None, auth=None,
 
     index = []
     projects = {}
-    not_readable = []
+    not_readable = [] # type: List
 
     # Ask remote server for data
     r = requests.get(url, headers=headers, auth=auth)
@@ -345,7 +336,7 @@ def get_projects_from_url(url, filter_term, headers=None, auth=None,
             projects[key] = project
             index.append((key, short_name))
     elif 'yaml' in content_type:
-        content = yaml.load_all(r.content)
+        content = yaml.load_all(r.content.decode('utf-8'), Loader=yaml.FullLoader)
         for p in content:
             project = PreProject(p, base_url, None)
             short_name = project.title
@@ -368,10 +359,10 @@ class ProjectSelector(object):
 
     def __init__(self, projects, project_index, known_project_filter,
             known_project_strategy, cursor=None):
-        self.ignored_projects = []
-        self.merged_projects = []
-        self.replacing_projects = []
-        self.new_projects = []
+        self.ignored_projects = [] # type: List
+        self.merged_projects = [] # type: List
+        self.replacing_projects = [] # type: List
+        self.new_projects = [] # type: List
 
         self.known_project_filter = known_project_filter
         self.known_project_strategy = known_project_strategy
@@ -379,7 +370,7 @@ class ProjectSelector(object):
         # Mark projects as known
         if projects and known_project_filter:
             # Mark known stacks, i.e. the ones having the same image base
-            for key, p in six.iteritems(projects):
+            for key, p in projects.items():
                 for s in p.stacks:
                     # Mark a project as known if an existing project shares the
                     # same title and the same mirrors.
@@ -423,11 +414,11 @@ class ProjectSelector(object):
                   GROUP BY project_id
                   ORDER BY project_id
                 """)
-                stack_map = defaultdict(list)
+                stack_map = defaultdict(list) # type: DefaultDict[Any, List]
                 for row in cursor.fetchall():
                   stack_map[tuple(sorted(row[1]))].append(row[0])
 
-                for key, p in six.iteritems(projects):
+                for key, p in projects.items():
                     if p.already_known:
                         # Name matches have precedence
                         continue
@@ -435,11 +426,11 @@ class ProjectSelector(object):
                     # title matches
                     all_stacks_known = all(s.already_known for s in p.stacks)
                     if all_stacks_known:
-                        known_stack_image_bases = []
+                        known_stack_image_bases = [] # type: List
                         for s in p.stacks:
                             known_stack_image_bases.extend(sm.image_base for sm in s.mirrors)
-                        known_stack_image_bases = tuple(sorted(known_stack_image_bases))
-                        known_projects = stack_map[known_stack_image_bases]
+                        known_stack_image_bases_tuple = tuple(sorted(known_stack_image_bases))
+                        known_projects = stack_map[known_stack_image_bases_tuple]
                         if known_projects:
                           # First one wins
                           p.set_known_pid(known_projects[0])
@@ -449,7 +440,7 @@ class ProjectSelector(object):
             p = projects[key]
             self.add_project(key, p)
 
-    def add_project(self, key, project):
+    def add_project(self, key, project) -> None:
         project.action = self.known_project_strategy
         if not project.already_known:
             self.new_projects.append((key, project))
@@ -465,7 +456,7 @@ class ProjectSelector(object):
             self.replacing_projects.append((key, project))
 
 class ImportingWizard(SessionWizardView):
-    def get_template_names(self):
+    def get_template_names(self) -> List:
         return [TEMPLATES[self.steps.current]]
 
     def get_form(self, step=None, data=None, files=None):
@@ -491,6 +482,7 @@ class ImportingWizard(SessionWizardView):
             filter_term = cleaned_path_data['filter_term']
             http_auth_user = cleaned_path_data['http_auth_user'].strip()
             http_auth_pass = cleaned_path_data['http_auth_pass']
+            json_spec = cleaned_path_data['json_spec']
             known_project_filter = cleaned_path_data['known_project_filter']
             known_project_strategy = cleaned_path_data['known_project_strategy']
             base_url = cleaned_path_data['base_url']
@@ -515,6 +507,9 @@ class ImportingWizard(SessionWizardView):
                     }
                 project_index, projects, not_readable = get_projects_from_url(
                         complete_catmaid_host, filter_term, headers, auth)
+            elif source == 'json-spec':
+                project_index, projects, not_readable = get_projects_from_raw_data(
+                        json.loads(json_spec), filter_term, base_url=base_url)
             else:
                 # Get all folders that match the selected criteria
                 data_dir = os.path.join(settings.CATMAID_IMPORT_PATH, path)
@@ -557,7 +552,7 @@ class ImportingWizard(SessionWizardView):
             # Get all classification graphs linked to those projects and add
             # them to a form for being selected.
             workspace = settings.ONTOLOGY_DUMMY_PROJECT_ID
-            croots = {}
+            croots = {} # type: Dict
             for p in projects:
                 links_qs = get_classification_links_qs(workspace, p.id)
                 linked_croots = set([cici.class_instance_b for cici in links_qs])
@@ -572,7 +567,7 @@ class ImportingWizard(SessionWizardView):
             # Remember graphs and projects
             form.cls_tags = tags
             form.cls_graph_map = croots
-            self.id_to_cls_graph = {}
+            self.id_to_cls_graph = {} # type: Dict
             # Create data structure for form field and id mapping
             cgraphs = []
             for cr in croots:
@@ -673,7 +668,7 @@ class ImportingWizard(SessionWizardView):
 
         return context
 
-    def done(self, form_list, **kwargs):
+    def done(self, form_list, **kwargs) -> HttpResponse:
         """ Will add the selected projects.
         """
         # Find selected projects
@@ -693,7 +688,7 @@ class ImportingWizard(SessionWizardView):
         # Classifications
         link_cls_graphs = self.get_cleaned_data_for_step(
             'projectselection')['link_classifications']
-        cls_graph_ids = []
+        cls_graph_ids = [] # type: List
         if link_cls_graphs:
             cls_graph_ids = self.get_cleaned_data_for_step(
                 'classification')['classification_graph_suggestions']
@@ -736,10 +731,10 @@ def show_classification_suggestions(wizard):
         or {'link_classifications': False}
     return cleaned_data['link_classifications']
 
-def importer_finish(request):
+def importer_finish(request:HttpRequest) -> HttpResponse:
     return render_to_response('catmaid/import/done.html', {})
 
-def get_element_permission_tuples(element, cls):
+def get_element_permission_tuples(element, cls) -> List[Tuple[str,str]]:
     """Get all available users mapped to all available project permissions.
     """
     ctype = ContentType.objects.get_for_model(cls)
@@ -755,8 +750,8 @@ def get_element_permission_tuples(element, cls):
 
     return tuples
 
-def get_permissions_from_selection(cls, selection):
-    permission_list = []
+def get_permissions_from_selection(cls, selection) -> List[Tuple]:
+    permission_list = [] # type: List[Tuple]
     for perm in selection:
         elem_id = perm[:perm.index('_')]
         elem = cls.objects.filter(id=elem_id)[0]
@@ -786,7 +781,8 @@ class DataFileForm(forms.Form):
             initial=settings.IMPORTER_DEFAULT_DATA_SOURCE,
             choices=(('filesystem', 'Data directory on server'),
                      ('remote-catmaid', 'Remote CATMAID instance'),
-                     ('remote', 'General remote host')),
+                     ('remote', 'General remote host'),
+                     ('json-spec', 'JSON representation')),
             help_text="Where new pojects and stacks will be looked for")
     relative_path = forms.CharField(required=False, widget=forms.TextInput(
         attrs={'size':'40', 'class': 'import-source-setting filesystem-import'}),
@@ -810,11 +806,13 @@ class DataFileForm(forms.Form):
     http_auth_pass = forms.CharField(required=False, widget=forms.PasswordInput(
         attrs={'size':'20', 'class': 'import-source-setting http-auth-user'}),
         help_text="(Optional) HTTP-Auth password for the remote server.")
+    json_spec = forms.CharField(required=False, widget=forms.Textarea(
+        attrs={'class': 'import-source-setting json-spec'}))
     filter_term = forms.CharField(initial="*", required=False,
         widget=forms.TextInput(attrs={'size':'40'}),
         help_text="Optionally, you can apply a <em>glob filter</em> to the " \
                   "projects found in your data folder.")
-    known_project_filter = forms.MultipleChoiceField(KNOWN_PROJECT_FILTERS,
+    known_project_filter = forms.MultipleChoiceField(choices=KNOWN_PROJECT_FILTERS,
             label='Projects are known if', initial=('name', 'stacks'),
             widget=forms.CheckboxSelectMultiple(), required=False,
             help_text='Select what makes makes a project known. An OR operation ' \
@@ -841,13 +839,13 @@ class DataFileForm(forms.Form):
         # Make sure URLs are provided for a remote import
         import_from = form_data['import_from']
         if 'remote-catmaid' == import_from:
-            error = is_invalid_host(form_data['catmaid_host'], auth)
-            if error:
-                raise ValidationError({'catmaid_host': [error]})
+            ok, msg = is_valid_host(form_data['catmaid_host'], auth)
+            if not ok:
+                raise ValidationError({'catmaid_host': [msg]})
         elif 'remote' == import_from:
-            error = is_invalid_host(form_data['remote_host'], auth)
-            if error:
-                raise ValidationError({'remote_host': [error]})
+            ok, msg = is_valid_host(form_data['remote_host'], auth)
+            if not ok:
+                raise ValidationError({'remote_host': [msg]})
 
         return form_data
 
@@ -904,7 +902,7 @@ def create_classification_linking_form():
     workspace_pid = settings.ONTOLOGY_DUMMY_PROJECT_ID
     root_links = get_classification_links_qs( workspace_pid, [], True )
     # Make sure we use no classification graph more than once
-    known_roots = []
+    known_roots = [] # type: List
     root_ids = []
     for link in root_links:
         if link.class_instance_b.id not in known_roots:
@@ -979,7 +977,7 @@ def ensure_classes(project, classes, user):
                 })
 
 
-def ensure_class_instances(project, classification_paths, user, stack=None, stackgroup=None):
+def ensure_class_instances(project, classification_paths, user, stack=None, stackgroup=None) -> None:
     """ Make sure the given project has all referenced class instances (by name)
     available. The names list is expected to be a classification root reference.
     Note: This currently expects each class to be instantiated only once in each
@@ -1078,11 +1076,12 @@ def ensure_class_instances(project, classification_paths, user, stack=None, stac
     else:
         raise ValueError("Unknown classification syntax, expected list: " + t)
 
-def import_projects( user, pre_projects, tags, permissions,
+def import_projects(user, pre_projects, tags, permissions,
         default_tile_width, default_tile_height, default_tile_source_type,
-        cls_graph_ids_to_link, remove_unref_stack_data):
+        cls_graph_ids_to_link, remove_unref_stack_data) -> Tuple[List, List]:
     """ Creates real CATMAID ojects out of the PreProject objects
-    and imports them into CATMAID.
+    and imports them into CATMAID. Returns one list of imported objects and another of
+    non-imported objects.
     """
     remove_unimported_linked_stacks = False
     known_stack_action = None
@@ -1092,9 +1091,9 @@ def import_projects( user, pre_projects, tags, permissions,
     cursor = connection.cursor()
     for pp in pre_projects:
         project = None
-        currently_linked_stacks = []
-        currently_linked_stack_ids = []
-        links = {}
+        currently_linked_stacks = [] # type: List
+        currently_linked_stack_ids = [] # type: List
+        links = {} # type: Dict
         all_stacks_known = all(s.already_known for s in pp.stacks)
         try:
             if pp.already_known:
@@ -1109,7 +1108,7 @@ def import_projects( user, pre_projects, tags, permissions,
                 # existing project is the only link.
                 links = {ss:[l for l in currently_linked_stacks if ss.equals(l)] \
                         for ss in pp.stacks}
-                all_stacks_linked = all(len(l) == 1 for l in six.itervalues(links))
+                all_stacks_linked = all(len(l) == 1 for l in links.values())
 
                 if 'ignore' == pp.action:
                     # Ignore all projects that are marked to be ignored
@@ -1157,11 +1156,11 @@ def import_projects( user, pre_projects, tags, permissions,
             # Create stacks and add them to project
             stacks = []
             updated_stacks = []
-            stack_groups = {}
+            stack_groups = {} # type: Dict
             translations = {}
             orientations = {}
             stack_classification = {}
-            stackgroup_classification = {}
+            stackgroup_classification = {} # type: Dict
             for s in pp.stacks:
 
                 # Test if stack is alrady known. This can change with every
@@ -1176,7 +1175,7 @@ def import_projects( user, pre_projects, tags, permissions,
                     'title': s.title,
                     'dimension': s.dimension,
                     'resolution': s.resolution,
-                    'num_zoom_levels': s.num_zoom_levels,
+                    'downsample_factors': s.downsample_factors,
                     'metadata': s.metadata,
                     'comment': s.comment,
                     'attribution': s.attribution,
@@ -1198,7 +1197,7 @@ def import_projects( user, pre_projects, tags, permissions,
                       # existing ones that have a valid link to the existing
                       # project.
                       stack = existing_stack
-                      for k,v in six.iteritems(stack_properties):
+                      for k,v in stack_properties.items():
                         if hasattr(stack, k):
                             setattr(stack, k, v)
                         else:
@@ -1252,7 +1251,7 @@ def import_projects( user, pre_projects, tags, permissions,
                       elif 'override' == known_stack_action:
                           # Find a linked (!) and matching mirror
                           for mirror in known_mirrors:
-                              for k,v in six.iteritems(mirror_properties):
+                              for k,v in mirror_properties.items():
                                 if hasattr(mirror, k):
                                     setattr(mirror, k, v)
                                 else:
@@ -1260,7 +1259,7 @@ def import_projects( user, pre_projects, tags, permissions,
                               mirror.save()
                       else:
                           raise ValueError("Invalid action for known mirror: " +
-                              known_stack_action)
+                             str(known_stack_action))
                     else:
                         # Default to mirror creation
                         if not known_mirrors:
@@ -1312,12 +1311,12 @@ def import_projects( user, pre_projects, tags, permissions,
                 ensure_class_instances(p, pp.classification, user)
 
             # Add classification and link to stacks
-            for s, classification in six.iteritems(stack_classification):
+            for s, classification in stack_classification.items():
                 ensure_class_instances(p, classification,  user, stack=s)
 
             # Save stack groups
             referenced_stackgroups = {}
-            for sg, linked_stacks in six.iteritems(stack_groups):
+            for sg, linked_stacks in stack_groups.items():
                 existing_stackgroups = StackGroup.objects.filter(title=sg)
 
                 if len(existing_stackgroups) > 1:

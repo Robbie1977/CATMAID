@@ -1,39 +1,37 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
-import logging
-import six
-import numpy as np
 from datetime import timedelta, datetime
 from dateutil import parser as dateparser
+import io
+import logging
+import numpy as np
 import pytz
+from typing import Any, Dict, List, Tuple
 
 from django.db import connection
-from django.http import HttpResponse
+from django.http import HttpRequest, HttpResponse
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.views.decorators.cache import never_cache
 
+from catmaid.control.common import get_request_bool
 from catmaid.control.authentication import requires_user_role
 from catmaid.models import Connector, Project, Treenode, Review, UserRole
 
 logger = logging.getLogger(__name__)
 
 try:
-    # Because we don't want to show generated images in a window, we can use
-    # the Agg backend. This avoids some potential threading issues.
     import matplotlib
-    matplotlib.use('Agg')
+    # Use a noninteractive backend since most CATMAID instances are headless.
+    matplotlib.use('svg')
 
     import matplotlib.pyplot as plt
     from matplotlib.dates import  DateFormatter, DayLocator
     from pylab import figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.backends.backend_svg import FigureCanvasSVG
 except ImportError:
     logger.warning("CATMAID was unable to laod the matplotlib module. "
         "User analytics will not be available")
-
-from six.moves import range
 
 
 class Bout(object):
@@ -68,8 +66,8 @@ class Bout(object):
 
 @never_cache
 @requires_user_role(UserRole.Browse)
-def plot_useranalytics(request, project_id):
-    """ Creates a PNG image containing different plots for analzing the
+def plot_useranalytics(request:HttpRequest, project_id) -> HttpResponse:
+    """ Creates an SVG image containing different plots for analzing the
     performance of individual users over time.
     """
     time_zone = pytz.utc
@@ -78,7 +76,7 @@ def plot_useranalytics(request, project_id):
     if not (userid and userid.strip()):
         raise ValueError("Need user ID")
     project = get_object_or_404(Project, pk=project_id) if project_id else None
-    all_writes = request.GET.get('all_writes', 'false') == 'true'
+    all_writes = get_request_bool(request.GET, 'all_writes', False)
     maxInactivity = int(request.GET.get('max_inactivity', 3))
 
     # Get the start date for the query, defaulting to 7 days ago.
@@ -111,12 +109,13 @@ def plot_useranalytics(request, project_id):
     else:
         f = generateErrorImage('You lack permissions to view this report.')
 
-    canvas = FigureCanvasAgg( f )
-    response = HttpResponse(content_type='image/png')
-    canvas.print_png(response)
-    return response
+    # Use raw text rather than SVG fonts or pathing.
+    plt.rcParams['svg.fonttype'] = 'none'
+    buf = io.BytesIO()
+    plt.savefig(buf, format='svg')
+    return HttpResponse(buf.getvalue(), content_type='image/svg+xml')
 
-def eventTimes(user_id, project_id, start_date, end_date, all_writes=True):
+def eventTimes(user_id, project_id, start_date, end_date, all_writes=True) -> Dict[str, Any]:
     """ Returns a tuple containing a list of tree node edition times, connector
     edition times and tree node review times within the date range specified
     where the editor/reviewer is the given user.
@@ -149,7 +148,7 @@ def eventTimes(user_id, project_id, start_date, end_date, all_writes=True):
 
     if all_writes:
         if project_id:
-            params = (start_date, end_date, user_id, project_id)
+            params = (start_date, end_date, user_id, project_id) # type: Tuple[str, ...]
             project_filter = "AND project_id = %s"
         else:
             params = (start_date, end_date, user_id)
@@ -170,7 +169,7 @@ def eventTimes(user_id, project_id, start_date, end_date, all_writes=True):
 
     return events
 
-def eventsPerInterval(times, start_date, end_date, interval='day'):
+def eventsPerInterval(times, start_date, end_date, interval='day') -> Tuple[np.ndarray, List]:
     """ Creates a histogram of how many events fall into all intervals between
     <start_data> and <end_date>. The interval type can be day, hour and
     halfhour. Returned is a tuple containing two elemens: the histogram and a
@@ -201,7 +200,7 @@ def eventsPerInterval(times, start_date, end_date, interval='day'):
 
     return timebins, timeaxis
 
-def activeTimes( alltimes, gapThresh ):
+def activeTimes(alltimes, gapThresh):
     """ Goes through the sorted array of time differences between all events
     stored in <alltimes>. If two events are closer together than <gapThresh>
     minutes, they are counted as events within one bout. A tuple containing a
@@ -222,7 +221,7 @@ def activeTimes( alltimes, gapThresh ):
             # Increment current bout's event counter and continue with the
             # next element as long as the time difference to the next
             # element is below our threshold.
-            bout.addEvent(e)
+            bout.addEvent(e) # type: ignore # mypy cannot prove bout will not be None
             continue
         else:
             # Return current bout (not available in first iteration) and create
@@ -274,7 +273,7 @@ def singleDayEvents( alltimes, start_hour, end_hour ):
                 activity[a.hour-start_hour] += 1
     return np.true_divide(activity,(alltimes[-1] - alltimes[0]).days), timeaxis
 
-def singleDayActiveness( activebouts, increment, start_hour, end_hour ):
+def singleDayActiveness(activebouts, increment, start_hour, end_hour) -> Tuple[Any, Any]:
     """ Returns a ... for all bouts between <start_hour> and <end_hour> of the
     day.
     """
@@ -339,7 +338,7 @@ def singleDayActiveness( activebouts, increment, start_hour, end_hour ):
     # Return a tuple containing a list durations and a list of timepoints
     return durations, timeaxis
 
-def splitBout(bout,increment):
+def splitBout(bout,increment) -> List[Bout]:
     """ Splits one bout in periods of <increment> minutes.
     """
     if np.mod(60, increment) > 0:
@@ -395,11 +394,7 @@ def generateReport(user_id, project_id, activeTimeThresh, start_date, end_date, 
 
     dayformat = DateFormatter('%b %d')
 
-    fig = plt.figure(figsize=(12,10))
-
-    # Restore defaults from matplotlib 1.5.3. Default dpi changed to 100 in
-    # matplotlib 2.0.0.
-    fig.dpi = 80
+    fig = plt.figure(figsize=(9.6, 8))
 
     # Top left plot: created and edited nodes per day
     ax1 = plt.subplot2grid((2,2), (0,0))
@@ -460,7 +455,7 @@ def generateReport(user_id, project_id, activeTimeThresh, start_date, end_date, 
     plt.setp(yl, fontsize=10)
     ax4.set_ylabel('Time (24 hr)')
 
-    plt.tight_layout()
+    fig.set_tight_layout(True)
 
     return fig
 
@@ -469,10 +464,10 @@ def dailyActivePlotFigure( activebouts, ax, start_date, end_date ):
     <end_date> to the plot given by <ax>.
     """
     # Y axis: Draw a line for each two hours in a day and set ticks accordingly
-    for i in range(12):
-        ax.axhline(2 * i, color='#AAAAAA', linestyle = ':')
+    for i in range(2, 24, 2):
+        ax.axhline(i, color='#AAAAAA', linestyle = ':')
     ax.axhspan(8,18,facecolor='#999999',alpha=0.25)
-    ax.set_yticks([0,2,4,6,8,10,12,14,16,18,20,22,24])
+    ax.set_yticks(range(0, 25, 2))
 
     # X axis: Ticks and labels for every day
     ax.xaxis.set_major_locator(DayLocator())
@@ -490,6 +485,7 @@ def dailyActivePlotFigure( activebouts, ax, start_date, end_date ):
 
     # Set Axis limits
     ax.set_ylim((0, 24))
+    ax.invert_yaxis()
     ax.set_xlim((start_date, end_date))
 
     return ax
@@ -514,7 +510,7 @@ def eventsPerIntervalPerDayPlot(ax,times,start_date,end_date,interval=60):
 
     timeaxis = [i for i in range(24 * 60 / interval )]
     timelabels = []
-    for i in range(24 * 60 / 30):
+    for i in range(int(24 * 60 / 30)):
         if np.mod(i,2)==0:
             timelabels.append( str(i/2) + ':00' )
         else:
@@ -527,7 +523,7 @@ def eventsPerIntervalPerDayPlot(ax,times,start_date,end_date,interval=60):
     ind = 0
     cm = plt.get_cmap('jet',len(timebins))
     dats = []
-    for dat in six.itervalues(timebins):
+    for dat in timebins.values():
         if np.sum(dat)==0:
             ignoredDays += 1
         else:

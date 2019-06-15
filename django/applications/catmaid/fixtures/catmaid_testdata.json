@@ -144,6 +144,13 @@
     }
   },
   {
+    "pk": 4,
+    "model": "catmaid.project",
+    "fields": {
+      "title": "Test"
+    }
+  },
+  {
     "pk": 5,
     "model": "catmaid.project",
     "fields": {
@@ -156,7 +163,6 @@
     "fields": {
       "title": "Original data.",
       "comment": "<p>&copy;2007 by Stephan Saalfeld.</p> <p>Rendered with <a href=\"http://www.povray.org/\">POV-Ray&nbsp;v3.6</a> using this <a href=\"http://fly.mpi-cbg.de/~saalfeld/download/volume.tar.bz2\">scene-file</a>.</p>",
-      "num_zoom_levels": -1,
       "resolution": "(3.261, 3.261, 60.000)",
       "dimension": "(4096, 4096, 16)",
       "description": ""
@@ -180,7 +186,6 @@
     "fields": {
       "title": "Focussed Ion Beam (FIB) stack of Rat Striatum\t",
       "comment": "<p>&copy;2009 <a href=\"http://people.epfl.ch/graham.knott\">Graham Knott</a>.</p> <p>Public INCF data set available at the <a href=\"http://www.incf.org/about/nodes/switzerland/data\">Swiss INCF Node</a>.</p>",
-      "num_zoom_levels": -1,
       "resolution": "(5.000, 5.000, 9.000)",
       "dimension": "(2048, 1536, 460)",
       "description": ""
@@ -204,7 +209,6 @@
     "fields": {
       "title": "FIB data, first stack",
       "comment": "Stack 1 for testing purposes",
-      "num_zoom_levels": -1,
       "resolution": "(5.000, 5.000, 9.000)",
       "dimension": "(2048, 1536, 460)",
       "description": ""
@@ -228,7 +232,6 @@
     "fields": {
       "title": "FIB data, second stack",
       "comment": "Stack 2 for testing purposes",
-      "num_zoom_levels": -1,
       "resolution": "(5.000, 5.000, 9.000)",
       "dimension": "(2048, 1536, 460)",
       "description": ""
@@ -1333,6 +1336,34 @@
       "edition_time": "2011-10-29T04:33:34.263Z",
       "project": 3,
       "relation_name": "abutting",
+      "user": 3
+    }
+  },
+  {
+    "pk": 102462,
+    "model": "catmaid.relation",
+    "fields": {
+      "description": null,
+      "isreciprocal": false,
+      "creation_time": "2011-10-29T04:33:34.263Z",
+      "uri": null,
+      "edition_time": "2011-10-29T04:33:34.263Z",
+      "project": 3,
+      "relation_name": "tightjunction_with",
+      "user": 3
+    }
+  },
+  {
+    "pk": 102463,
+    "model": "catmaid.relation",
+    "fields": {
+      "description": null,
+      "isreciprocal": false,
+      "creation_time": "2011-10-29T04:33:34.263Z",
+      "uri": null,
+      "edition_time": "2011-10-29T04:33:34.263Z",
+      "project": 3,
+      "relation_name": "desmosome_with",
       "user": 3
     }
   },

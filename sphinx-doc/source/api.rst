@@ -103,22 +103,54 @@ does not conflict with server-level HTTP authorization.
 Example API Use
 ---------------
 
-Below is a minimal example of accessing the API of a CATMAID server
+Command line
+^^^^^^^^^^^^
+
+The perhaps easiest way to talk to the CATMAID API is to use the ``curl``
+command line tool::
+
+    curl --header 'X-Authorization: Token <auth-token>' -X GET '<catmaid-url>'
+
+If the CATMAID instance requires basic HTTP authentication, you can add the ``-u
+<user>:<pass>`` parameter to the ``curl`` command. For intance, to get all
+currently available node tags in a project with ID ``1`` from the CATMAID
+instance hosted at ``https://example.com/catmaid/`` using basic HTTP
+authentication with user "myuser" and password "mypass", you can do the
+following::
+
+    curl --header 'X-Authorization: Token 9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b' \
+        -u myuser:mypass -X GET 'https://example.com/catmaid/1/labels'
+
+Python
+^^^^^^
+
+The lowest-friction way to access the CATMAID API using python is through the ``catpy`` package,
+which handles all of the boilerplate, includes a number of tools for working with CATMAID
+data, and is just a ``pip install catpy`` away.
+For more information, see `the catpy docs<https://catpy.readthedocs.io>`_.
+
+If for some reason you are unable to use ``catpy``,
+below is a minimal example of accessing the API of a CATMAID server
 running on ``localhost`` using the `Requests Python package
 <http://docs.python-requests.org/en/latest/index.html>`_:
 
 .. code-block:: python
 
     import requests
-    from requests.auth import AuthBase
+    from requests.auth import HTTPBasicAuth
 
-    class CatmaidApiTokenAuth(AuthBase):
-        """Attaches HTTP X-Authorization Token headers to the given Request."""
-        def __init__(self, token):
+    class CatmaidApiTokenAuth(HTTPBasicAuth):
+        """Attaches HTTP X-Authorization Token headers to the given Request.
+        Optionally, Basic HTTP Authentication can be used in parallel.
+        """
+        def __init__(self, token, username=None, password=None):
+            super(CatmaidApiTokenAuth, self).__init__(username, password)
             self.token = token
 
         def __call__(self, r):
             r.headers['X-Authorization'] = 'Token {}'.format(self.token)
+            if self.username and self.password:
+                super(CatmaidApiTokenAuth, self).__call__(r)
             return r
 
     # Replace these fake values with your own.
@@ -126,7 +158,11 @@ running on ``localhost`` using the `Requests Python package
     project_id = 1
     object_ids = [42]
 
-    response = requests.post(
+    label_response = requests.get(
+            'https://localhost/{}/labels'.format(project_id),
+            auth=CatmaidApiTokenAuth(token))
+
+    annotation_response = requests.post(
             'https://localhost/{}/annotations/query'.format(project_id),
             auth=CatmaidApiTokenAuth(token),
             data={'object_ids': object_ids})
@@ -135,6 +171,9 @@ Other API Clients
 -----------------
 
 A partial listing of libraries or programs that consume the CATMAID HTTP API:
+
+`catpy <https://catpy.readthedocs.io>`_
+   Official python 2.7 and 3.4+ client by `members of the Cardona lab <https://catpy.readthedocs.io/en/latest/authors.html>`_
 
 `RCATMAID <https://github.com/jefferis/rcatmaid>`_
    R bindings for the CATMAID API by

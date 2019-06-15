@@ -2,7 +2,6 @@
 /* vim: set softtabstop=2 shiftwidth=2 tabstop=2 expandtab: */
 /* global
   project,
-  requestQueue,
   SkeletonAnnotations,
 */
 
@@ -12,6 +11,10 @@
   "use strict";
 
   var lineNormal = function (x1, y1, x2, y2) {
+    return setLineNormal(x1, y1, x2, y2, [null, null]);
+  };
+
+  let setLineNormal = function(x1, y1, x2, y2, target) {
     var xdiff = x2 - x1,
         ydiff = y2 - y1,
         length = Math.sqrt(xdiff*xdiff + ydiff*ydiff),
@@ -20,7 +23,9 @@
         nx = length === 0 ? 0 : -ydiff / length,
         ny = length === 0 ? 1 : xdiff / length;
 
-    return [nx, ny];
+    target[0] = nx;
+    target[1] = ny;
+    return target;
   };
 
   var RADII_VISIBILITY = ['none', 'active-node', 'active-skeleton', 'all'];
@@ -35,7 +40,7 @@
        */
       createSkeletonElements: function(tracingOverlay, pixiContainer, skeletonDisplayModels) {
         // Add prototype
-        SkeletonElements.prototype = createSkeletonElementsPrototype();
+        SkeletonElements.prototype = createSkeletonElementsPrototype(tracingOverlay);
 
         return new SkeletonElements(tracingOverlay, pixiContainer, skeletonDisplayModels);
       }
@@ -125,7 +130,7 @@
     this.overlayGlobals = {
       tracingOverlay: tracingOverlay,
       skeletonElements: this,
-      skeletonDisplayModels: skeletonDisplayModels || {},
+      skeletonDisplayModels: skeletonDisplayModels || new Map(),
       hideOtherSkeletons: false
     };
 
@@ -155,9 +160,9 @@
     }, {});
 
     this.cache = {
-      nodePool: new this.ElementPool(100, 1.2),
-      connectorPool: new this.ElementPool(20, 1.2),
-      arrowPool: new this.ElementPool(50, 1.2),
+      nodePool: new ElementPool(100, 1.2),
+      connectorPool: new ElementPool(20, 1.2),
+      arrowPool: new ElementPool(50, 1.2),
 
       clear: function() {
         this.nodePool.clear();
@@ -299,59 +304,8 @@
 
   ////// Definition of classes used in SkeletonElements
 
-  var createSkeletonElementsPrototype = function() {
+  var createSkeletonElementsPrototype = function(tracingOverlay) {
     var ptype = {};
-
-      /** For reusing objects such as DOM elements, which are expensive to insert and remove. */
-    ptype.ElementPool = function(reserveSize, reserveProportion) {
-      this.pool = [];
-      this.nextIndex = 0;
-      this.reserveSize = reserveSize;
-      this.reserveProportion = reserveProportion;
-    };
-
-    $.extend(ptype.ElementPool.prototype, {
-        reset: function() {
-          this.nextIndex = 0;
-        },
-
-        obliterateFn: function(element) {
-          element.obliterate();
-        },
-
-        disableFn: function(element) {
-          element.disable();
-        },
-
-        clear: function() {
-          this.pool.splice(0).forEach(this.obliterateFn);
-          this.reset();
-        },
-
-        disableBeyond: function(newLength) {
-          if (newLength < this.pool.length) {
-            var reserve = Math.max(newLength + this.reserveSize,
-                                   Math.floor(newLength * this.reserveProportion));
-            // Drop elements beyond new length plus reserve
-            if (this.pool.length > reserve) {
-              this.pool.splice(reserve).forEach(this.obliterateFn);
-            }
-            // Disable elements from cut off to new ending of node pool array
-            this.pool.slice(newLength).forEach(this.disableFn);
-          }
-        },
-
-        next: function() {
-          return this.nextIndex < this.pool.length ?
-            this.pool[this.nextIndex++] : null;
-        },
-
-        /** Append a new element at the end, implying that all other elements are in use. */
-        push: function(element) {
-          this.pool.push(element);
-          this.nextIndex += 1;
-        }
-      });
 
     /**
      * Add a epoch based time field and a corresponding _iso_str version to a
@@ -377,6 +331,7 @@
     ptype.NodePrototype = new (function() {
       this.CONFIDENCE_FONT_PT = 15;
       this.confidenceFontSize = this.CONFIDENCE_FONT_PT + 'pt';
+      this.scaledConfidenceFontSize = this.CONFIDENCE_FONT_PT + 'pt';
       // Store current node scaling factor
       this.scaling = 1.0;
       this.baseScale = 1.0;
@@ -390,32 +345,36 @@
 
       this.markerType = 'disc';
 
-      this.planeX = function () {
-        switch (this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.orientation) {
+      // Compute the planar X, Y and Z dimensions in stack space for the tracing
+      // overlay of this prototype hierarchy. We don't expect this to change
+      // during the lifetime of a SkeletonElements instance.
+
+      this.planeX = (function () {
+        switch (tracingOverlay.stackViewer.primaryStack.orientation) {
           case CATMAID.Stack.ORIENTATION_ZY:
             return 'z';
           default:
             return 'x';
         }
-      };
+      })();
 
-      this.planeY = function () {
-        switch (this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.orientation) {
+      this.planeY = (function () {
+        switch (tracingOverlay.stackViewer.primaryStack.orientation) {
           case CATMAID.Stack.ORIENTATION_XZ:
             return 'z';
           default:
             return 'y';
         }
-      };
+      })();
 
-      this.planeZ = function () {
-        switch (this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.orientation) {
+      this.planeZ = (function () {
+        switch (tracingOverlay.stackViewer.primaryStack.orientation) {
           case CATMAID.Stack.ORIENTATION_XZ:
             return 'y';
           default:
             return 'z';
         }
-      };
+      })();
 
       /**
        * Create the node graphics elements.
@@ -435,19 +394,16 @@
 
           this.overlayGlobals.skeletonElements.containers.nodes.addChild(this.c);
 
-          ptype.mouseEventManager.attach(this.c, this.type);
+          ptype.pointerEventManager.attach(this.c, this.type);
         }
 
-        this.c.x = this[this.planeX()];
-        this.c.y = this[this.planeY()];
+        this.c.x = this[this.planeX];
+        this.c.y = this[this.planeY];
         this.c.scale.set(this.stackScaling);
-        // this.c.scale.set(
-        //     this.stackScaling / this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.anisotropy.x,
-        //     this.stackScaling / this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.anisotropy.y);
 
         this.c.tint = this.color();
 
-        this.c.visible = SkeletonAnnotations.VisibilityGroups.areGroupsVisible(this.getVisibilityGroups());
+        this.c.visible = SkeletonAnnotations.VisibilityGroups.areGroupsVisible(this.getVisibilityGroups(false));
       };
 
       this.createRadiusGraphics = function () {
@@ -478,8 +434,8 @@
           this.radiusGraphics.drawCircle(0, 0, this.radius);
           this.radiusGraphics.tint = this.c.tint;
           this.radiusGraphics.visible = this.c.visible;
-          this.radiusGraphics.x = this[this.planeX()];
-          this.radiusGraphics.y = this[this.planeY()];
+          this.radiusGraphics.x = this[this.planeX];
+          this.radiusGraphics.y = this[this.planeY];
         } else if (this.radiusGraphics) {
           this.radiusGraphics.parent.removeChild(this.radiusGraphics);
           this.radiusGraphics.destroy();
@@ -501,7 +457,7 @@
 
       this.isVisible = function () {
         return this.shouldDisplay() &&
-            SkeletonAnnotations.VisibilityGroups.areGroupsVisible(this.getVisibilityGroups());
+            SkeletonAnnotations.VisibilityGroups.areGroupsVisible(this.getVisibilityGroups(false));
       };
 
       this.updateVisibility = function (noCache) {
@@ -539,7 +495,7 @@
         this.stackScaling = baseScale * resScale * (dynamicScale ? dynamicScale : 1);
         this.scaling = baseScale * (dynamicScale ? dynamicScale : 1);
         this.EDGE_WIDTH = this.BASE_EDGE_WIDTH * this.stackScaling;//baseScale * (dynamicScale ? 1 : resScale);
-        this.confidenceFontSize = this.CONFIDENCE_FONT_PT*this.stackScaling + 'pt';
+        this.scaledConfidenceFontSize = this.CONFIDENCE_FONT_PT * this.stackScaling + 'pt';
         this.textResolution = resScale;
 
         this.pixelsPerUnitSq = 1 / (this.stackScaling * this.stackScaling);
@@ -571,7 +527,7 @@
         var g = this.makeMarker();
 
         var tracingOverlay = this.overlayGlobals.tracingOverlay;
-        var texture = tracingOverlay.pixiLayer._context.renderer.generateTexture(g, PIXI.SCALE_MODES.DEFAULT, 1);
+        var texture = tracingOverlay.pixiLayer._context.renderer.generateTexture(g, PIXI.settings.SCALE_MODES, 1);
 
         if (this.NODE_TEXTURE) {
           var oldBaseTexture = this.NODE_TEXTURE.baseTexture;
@@ -600,41 +556,44 @@
       this.type = SkeletonAnnotations.TYPE_NODE;
 
       this.addChildNode = function(childNode) {
-        if (!this.children.hasOwnProperty(childNode.id)) {
-          ++ this.numberOfChildren;
-        }
-        // Still set new node object in any case, since
-        // node objects can be reused for different IDs
-        this.children[childNode.id] = childNode;
+        this.children.set(childNode.id, childNode);
       };
 
       this.removeChildNode = function (childNode) {
-        if (this.children.hasOwnProperty(childNode.id)) {
-          -- this.numberOfChildren;
-          delete this.children[childNode.id];
-        }
+        this.children.delete(childNode.id);
       };
 
       this.linkConnector = function(connectorId, link) {
-        this.connectors[connectorId] = link;
+        this.connectors.set(connectorId, link);
       };
 
       this.shouldDisplay = function () {
         return this.id !== this.DISABLED && this.zdiff >= 0 && this.zdiff < 1 &&
             (!this.overlayGlobals.hideOtherSkeletons ||
-             this.overlayGlobals.skeletonDisplayModels.hasOwnProperty(this.skeleton_id));
+             this.overlayGlobals.skeletonDisplayModels.has(this.skeleton_id));
       };
 
+      // A shared empty list to indicate the absence of associated visibility
+      // groups to save memory in situations with many treenodes.
+      let _emptyVisibilityGroupList = [];
+
+      /**
+       * Set and returns the list of visibility groups associated with this
+       * treenode. If there are no visibility groups associated, a sharead empty
+       * list is returned.
+       */
       this.getVisibilityGroups = function (noCache) {
         if (this.visibilityGroups && !noCache) return this.visibilityGroups;
 
-        this.visibilityGroups = [];
-
+        let visibilityGroups;
         for (var groupID = SkeletonAnnotations.VisibilityGroups.groups.length - 1; groupID >= 0; groupID--) {
-          if (SkeletonAnnotations.VisibilityGroups.isNodeInGroup(groupID, this))
-            this.visibilityGroups.push(groupID);
+          if (SkeletonAnnotations.VisibilityGroups.isNodeInGroup(groupID, this)) {
+            if (!visibilityGroups) visibilityGroups = [];
+            visibilityGroups.push(groupID);
+          }
         }
 
+        this.visibilityGroups = visibilityGroups ? visibilityGroups : _emptyVisibilityGroupList;
         return this.visibilityGroups;
       };
 
@@ -646,24 +605,24 @@
        * @return {number}           Hex color.
        */
       this.color = function() {
-        var model = this.overlayGlobals.skeletonDisplayModels[this.skeleton_id];
+        var model = this.overlayGlobals.skeletonDisplayModels.get(this.skeleton_id);
         if (model) return this.colorCustom(model.color);
         var color;
         if (SkeletonAnnotations.getActiveNodeId() === this.id) {
           if (SkeletonAnnotations.isRealNode(this.id)) {
-            color = SkeletonAnnotations.TracingOverlay.Settings.session.active_node_color;
+            color = CATMAID.TracingOverlay.Settings.session.active_node_color;
           } else {
             if (this.overlayGlobals.tracingOverlay.isVirtualNodeSuppressed(this.id)) {
-              color = SkeletonAnnotations.TracingOverlay.Settings.session.active_suppressed_virtual_node_color;
+              color = CATMAID.TracingOverlay.Settings.session.active_suppressed_virtual_node_color;
             } else {
-              color = SkeletonAnnotations.TracingOverlay.Settings.session.active_virtual_node_color;
+              color = CATMAID.TracingOverlay.Settings.session.active_virtual_node_color;
             }
           }
         } else if (null === this.parent_id) {
           // The root node should be colored red unless it's active:
-          color = SkeletonAnnotations.TracingOverlay.Settings.session.root_node_color;
-        } else if (0 === this.numberOfChildren) {
-          color = SkeletonAnnotations.TracingOverlay.Settings.session.leaf_node_color;
+          color = CATMAID.TracingOverlay.Settings.session.root_node_color;
+        } else if (0 === this.children.size) {
+          color = CATMAID.TracingOverlay.Settings.session.leaf_node_color;
         } else {
           // If none of the above applies, just colour according to the z difference.
           color = this.colorFromZDiff();
@@ -683,17 +642,17 @@
       this.colorCustom = function (baseColor) {
         if (SkeletonAnnotations.getActiveNodeId() === this.id) {
           if (SkeletonAnnotations.isRealNode(this.id)) {
-            return SkeletonAnnotations.TracingOverlay.Settings.session.active_node_color;
+            return CATMAID.TracingOverlay.Settings.session.active_node_color;
           } else {
             if (this.overlayGlobals.tracingOverlay.isVirtualNodeSuppressed(this.id)) {
-              return SkeletonAnnotations.TracingOverlay.Settings.session.active_suppressed_virtual_node_color;
+              return CATMAID.TracingOverlay.Settings.session.active_suppressed_virtual_node_color;
             } else {
-              return SkeletonAnnotations.TracingOverlay.Settings.session.active_virtual_node_color;
+              return CATMAID.TracingOverlay.Settings.session.active_virtual_node_color;
             }
           }
         } else if (null === this.parent_id) {
           return baseColor.clone().offsetHSL(0, 0, 0.25).getHex();
-        } else if (0 === this.numberOfChildren) {
+        } else if (0 === this.children.size) {
           return baseColor.clone().offsetHSL(0, 0, -0.25).getHex();
         } else {
           // If none of the above applies, just colour according to the z difference.
@@ -709,24 +668,24 @@
        * @return {number}                Hex color.
        */
       this.colorFromZDiff = function() {
-        var model = this.overlayGlobals.skeletonDisplayModels[this.skeleton_id];
+        var model = this.overlayGlobals.skeletonDisplayModels.get(this.skeleton_id);
         if (model) return this.colorCustomFromZDiff(model.color);
         // zdiff is in sections, therefore the current section is at [0, 1) --
         // notice 0 is inclusive and 1 is exclusive.
         if (this.zdiff >= 1) {
-          return SkeletonAnnotations.TracingOverlay.Settings.session.inactive_skeleton_color_above;
+          return CATMAID.TracingOverlay.Settings.session.inactive_skeleton_color_above;
         } else if (this.zdiff < 0) {
-          return SkeletonAnnotations.TracingOverlay.Settings.session.inactive_skeleton_color_below;
+          return CATMAID.TracingOverlay.Settings.session.inactive_skeleton_color_below;
         } else if (SkeletonAnnotations.getActiveSkeletonId() === this.skeleton_id) {
           if (SkeletonAnnotations.isRealNode(this.id)) {
-            return SkeletonAnnotations.TracingOverlay.Settings.session.active_skeleton_color;
+            return CATMAID.TracingOverlay.Settings.session.active_skeleton_color;
           } else {
-            return SkeletonAnnotations.TracingOverlay.Settings.session.active_skeleton_color_virtual;
+            return CATMAID.TracingOverlay.Settings.session.active_skeleton_color_virtual;
           }
         } else if (SkeletonAnnotations.isRealNode(this.id)) {
-          return SkeletonAnnotations.TracingOverlay.Settings.session.inactive_skeleton_color;
+          return CATMAID.TracingOverlay.Settings.session.inactive_skeleton_color;
         } else {
-          return SkeletonAnnotations.TracingOverlay.Settings.session.inactive_skeleton_color_virtual;
+          return CATMAID.TracingOverlay.Settings.session.inactive_skeleton_color_virtual;
         }
       };
 
@@ -748,9 +707,9 @@
           return baseColor.clone().offsetHSL(-0.1, 0, 0).getHex();
         } else if (SkeletonAnnotations.getActiveSkeletonId() === this.skeleton_id) {
           if (SkeletonAnnotations.isRealNode(this.id)) {
-            return SkeletonAnnotations.TracingOverlay.Settings.session.active_skeleton_color;
+            return CATMAID.TracingOverlay.Settings.session.active_skeleton_color;
           } else {
-            return SkeletonAnnotations.TracingOverlay.Settings.session.active_skeleton_color_virtual;
+            return CATMAID.TracingOverlay.Settings.session.active_skeleton_color_virtual;
           }
         } else if (SkeletonAnnotations.isRealNode(this.id)) {
           return baseColor.getHex();
@@ -776,34 +735,51 @@
       // Looked up to prevent frequent namespace lookups.
       let intersectLineWithPlane = CATMAID.tools.intersectLineWithPlane;
       let intersectionTarget = new THREE.Vector3();
+      let intersectionWorkingLine = new THREE.Line3(new THREE.Vector3(),
+          new THREE.Vector3());
+      let intersectionWorkingPlane = new THREE.Plane();
 
       /**
        * Get the intersection X and Y coordinate between node and and two with the
        * plane that is @zDiff units above node two. If it happens that there is no
-       * difference in Z, node one's X and Y coordinate are returned.
+       * difference in Z, node one's X and Y coordinate are returned. The target
+       * parameter is expected to be a two element list, into which the result
+       * is copied.
        */
-      this.getIntersection = function(node1, node2, zDiff) {
+      this.getIntersection = function(node1, node2, zDiff, target) {
         if (0 === zDiff) {
-          return [node1[node1.planeX()], node1[node1.planeY()]];
+          target[0] = node1[node1.planeX];
+          target[1] = node1[node1.planeY];
         } else {
           let sv = this.overlayGlobals.tracingOverlay.stackViewer;
-          let plane = sv.plane.clone();
-          plane.constant += sv.primaryStack.resolution.z *
+          intersectionWorkingPlane.copy(sv.plane);
+          intersectionWorkingPlane.constant += sv.primaryStack.resolution.z *
             (sv.primaryStack.projectToStackZ(node2.z, node2.y, node2.x)
             - sv.z + zDiff);
-          let intersection = intersectLineWithPlane(
-              node1.x, node1.y, node1.z,
-              node2.x, node2.y, node2.z,
-              plane, intersectionTarget);
+          intersectionWorkingLine.start.set(node1.x, node1.y, node1.z);
+          intersectionWorkingLine.end.set(node2.x, node2.y, node2.z);
+          let intersection = intersectionWorkingPlane.intersectLine(intersectionWorkingLine,
+              intersectionTarget);
           if (!intersection) {
             return null;
           } else {
-            return [intersection[node1.planeX()], intersection[node1.planeY()]];
+            target[0] = intersection[node1.planeX];
+            target[1] = intersection[node1.planeY];
           }
         }
+
+        return target;
       };
 
-      /** Updates the coordinates of the line from the node to the parent. */
+      // A shared inersection target to avoid creating new objects when
+      // redrawing a line to a parent node. These variables are internal to
+      // drawLineToParent().
+      let _parentIntersectionTarget = [null, null];
+      let _childIntersectionTarget = [null, null];
+      let _normTarget = [null, null];
+
+      /** Updates the coordinates of the line from the node to the parent. Is
+       * called frequently. */
       this.drawLineToParent = function() {
         if (!this.parent) {
           return;
@@ -816,9 +792,11 @@
         // Z, draw the line only until it meets with the next non-boken slice,
         // in direction of the child or the parent, respectively.
         var childLocation = this.getIntersection(this, this.parent,
-            Math.max(this.dToSecBefore, Math.min(this.dToSecAfter, this.zdiff)));
+            Math.max(this.dToSecBefore, Math.min(this.dToSecAfter, this.zdiff)),
+            _parentIntersectionTarget);
         var parentLocation = this.getIntersection(this.parent, this,
-            Math.max(this.dToSecBefore, Math.min(this.dToSecAfter, this.parent.zdiff)));
+            Math.max(this.dToSecBefore, Math.min(this.dToSecAfter, this.parent.zdiff)),
+            _childIntersectionTarget);
 
         // If no intersection was found between the child-parent edge and the
         // plane, don't draw the line.
@@ -841,14 +819,11 @@
           this.overlayGlobals.skeletonElements.containers.lines.addChild(this.line);
           line.node = this;
           line.interactive = true;
-          line.on('click', ptype.mouseEventManager.edge_mc_click);
+          line.on('pointerupoutside', ptype.pointerEventManager.edge_mc_click);
           line.lineStyle(this.EDGE_WIDTH, 0xFFFFFF, 1.0);
           line.moveTo(0, 0);
           line.lineTo(0, 0);
           line.hitArea = new PIXI.Polygon(0, 0, 0, 0, 0, 0, 0, 0);
-          // line.scale.set(
-          //       1 / this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.anisotropy.x,
-          //       1 / this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.anisotropy.y);
         }
 
         this.line.tooShort = false;
@@ -869,11 +844,11 @@
         var lineColor = this.colorFromZDiff();
         line.tint = lineColor;
 
-        var norm = lineNormal(childLocation[0], childLocation[1],
-                              parentLocation[0], parentLocation[1]);
+        var norm = setLineNormal(childLocation[0], childLocation[1],
+            parentLocation[0], parentLocation[1], _normTarget);
         var s = this.BASE_EDGE_WIDTH * 2.0;
-        norm[0] *= s; // / this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.anisotropy.x;
-        norm[1] *= s; // / this.overlayGlobals.tracingOverlay.stackViewer.primaryStack.anisotropy.y;
+        norm[0] *= s;
+        norm[1] *= s;
         // Assign hit area to existing points array to avoid allocation.
         let lineHitAreaPoints = line.hitArea.points;
         lineHitAreaPoints[0] = childLocation[0]  + norm[0];
@@ -885,7 +860,7 @@
         lineHitAreaPoints[6] = childLocation[0]  - norm[0];
         lineHitAreaPoints[7] = childLocation[1]  - norm[1];
 
-        this.line.visible = SkeletonAnnotations.VisibilityGroups.areGroupsVisible(this.getVisibilityGroups());
+        this.line.visible = SkeletonAnnotations.VisibilityGroups.areGroupsVisible(this.getVisibilityGroups(false));
 
         if (this.confidence < 5) {
           // Create new or update
@@ -908,12 +883,9 @@
        * for. */
       this.drawEdges = function(toChildren) {
         if (toChildren) {
-          for (var ID in this.children) {
-            if (this.children.hasOwnProperty(ID)) {
-              var child = this.children[ID];
-              if (this.mustDrawLineWith(child)) {
-                child.drawLineToParent();
-              }
+          for (var child of this.children.values()) {
+            if (this.mustDrawLineWith(child)) {
+              child.drawLineToParent();
             }
           }
         }
@@ -929,11 +901,10 @@
         this.parent = null;
         this.parent_id = null;
         this.children = null;
-        this.numberOfChildren = 0;
         this.connectors = null;
         this.visibilityGroups = null;
         if (this.c) {
-          ptype.mouseEventManager.forget(this.c, SkeletonAnnotations.TYPE_NODE);
+          ptype.pointerEventManager.forget(this.c, SkeletonAnnotations.TYPE_NODE);
           this.c.node = null;
           this.c.parent.removeChild(this.c);
           this.c.destroy();
@@ -965,9 +936,8 @@
         this.id = this.DISABLED;
         this.parent = null;
         this.parent_id = this.DISABLED;
-        this.children = {};
-        this.numberOfChildren = 0;
-        this.connectors = {};
+        this.children.clear();
+        this.connectors.clear();
         this.visibilityGroups = null;
         if (this.c) {
           this.c.visible = false;
@@ -992,9 +962,8 @@
         this.id = id;
         this.parent = parent;
         this.parent_id = parent_id;
-        this.children = {};
-        this.numberOfChildren = 0;
-        this.connectors = {};
+        this.children.clear();
+        this.connectors.clear();
         this.visibilityGroups = null;
         this.radius = radius; // the radius as stored in the database
         this.x = x;
@@ -1027,7 +996,7 @@
 
       /**
        * Draws a circle around the treenode and control its radius with the help of
-       * the mouse (and a mouse-to-stack transform function).
+       * the pointer (and a pointer-to-stack transform function).
        */
       this.drawSurroundingCircle = function(drawLine, toStack, stackToProject, onclickHandler) {
         var self = this;
@@ -1036,19 +1005,19 @@
 
         var c = new PIXI.Graphics();
         c.lineStyle(this.EDGE_WIDTH, 0xFFFFFF, 1.0);
-        c.drawCircle(this[this.planeX()], this[this.planeY()], 0);
+        c.drawCircle(this[this.planeX], this[this.planeY], 0);
         this.overlayGlobals.skeletonElements.containers.nodes.addChild(c);
-        c.hitArea = new PIXI.Circle(this[this.planeX()], this[this.planeY()], 1000000);
+        c.hitArea = new PIXI.Circle(this[this.planeX], this[this.planeY], 1000000);
         c.interactive = true;
         c.visible = true;
         c.tint = color;
 
-        // Create a line from the node to mouse if requested
+        // Create a line from the node to pointer if requested
         if (drawLine) {
           var line = new PIXI.Graphics();
           line.lineStyle(this.EDGE_WIDTH, 0xFFFFFF, 1.0);
-          line.moveTo(this[this.planeX()], this[this.planeY()]);
-          line.lineTo(this[this.planeX()] + 1, this[this.planeY()] + 1);
+          line.moveTo(this[this.planeX], this[this.planeY]);
+          line.lineTo(this[this.planeX] + 1, this[this.planeY] + 1);
           line.tint = color;
           line.visible = true;
           this.overlayGlobals.skeletonElements.containers.lines.addChild(line);
@@ -1059,11 +1028,11 @@
             .append('g')
             .classed('radiuslabel', true)
             .attr({ 'pointer-events': 'none'});
-        var fontSize = parseFloat(ptype.ArrowLine.prototype.confidenceFontSize) * 0.75;
+        var fontSize = parseFloat(ptype.ArrowLine.prototype.scaledConfidenceFontSize) * 0.75;
         var pad = fontSize * 0.5;
         var labelShadow = label.append('rect').attr({
-            x: this[this.planeX()],
-            y: this[this.planeY()],
+            x: this[this.planeX],
+            y: this[this.planeY],
             rx: pad,
             ry: pad,
             stroke: '#000',
@@ -1071,8 +1040,8 @@
             opacity: 0.75,
             'pointer-events': 'none'});
         var labelText = label.append('text').attr({
-            x: this[this.planeX()],
-            y: this[this.planeY()],
+            x: this[this.planeX],
+            y: this[this.planeY],
             'font-size': fontSize + 'pt',
             fill: '#FFF',
             'pointer-events': 'none'});
@@ -1087,12 +1056,12 @@
         // re-initialized due to an update. This also means that the circle cannot
         // be drawn while the node is changing location.
         var nodeP = {x: this.x, y: this.y, z: this.z};
-        var planeX = this.planeX();
-        var planeY = this.planeY();
-        var planeZ = this.planeZ();
+        var planeX = this.planeX;
+        var planeY = this.planeY;
+        var planeZ = this.planeZ;
 
-        // Update radius on mouse move
-        c.on('mousemove', function (event) {
+        // Update radius on pointer move
+        c.on('pointermove', function (event) {
           var e = event.data.originalEvent;
           var rS = toStack({x: e.offsetX, y: e.offsetY});
           var rP = stackToProject(rS);
@@ -1120,11 +1089,11 @@
               height: bbox.height + pad});
 
           if (line) {
-            var lineColor = SkeletonAnnotations.TracingOverlay.Settings.session.active_skeleton_color;
+            var lineColor = CATMAID.TracingOverlay.Settings.session.active_skeleton_color;
             if (r.z !== 0) {
               lineColor = (r.z < 0) ?
-                  SkeletonAnnotations.TracingOverlay.Settings.session.inactive_skeleton_color_above :
-                  SkeletonAnnotations.TracingOverlay.Settings.session.inactive_skeleton_color_below;
+                  CATMAID.TracingOverlay.Settings.session.inactive_skeleton_color_above :
+                  CATMAID.TracingOverlay.Settings.session.inactive_skeleton_color_below;
             }
             line.clear();
             line.lineStyle(self.EDGE_WIDTH, 0xFFFFFF, 1.0);
@@ -1136,15 +1105,17 @@
           self.overlayGlobals.tracingOverlay.redraw();
         });
 
-        // Don't let mouse down events bubble up
-        c.on('mousedown', function (event) {
+        // Don't let pointer down events bubble up
+        c.on('pointerdown', function (event) {
           var e = event.data.originalEvent;
-          e.stopPropagation();
           e.preventDefault();
         });
-        c.on('click', function (event) {
+        c.on('pointerupoutside', function (event) {
+          // Stop both the Pixi event and the DOM event from propagation.
+          // Otherwise other Pixi elements can receive this event as well.
+          event.stopPropagation();
+
           var e = event.data.originalEvent;
-          e.stopPropagation();
           e.preventDefault();
           if (onclickHandler) { onclickHandler(); }
           return true;
@@ -1202,9 +1173,8 @@
       this.id = id;
       this.parent = parent;
       this.parent_id = parent_id;
-      this.children = {};
-      this.numberOfChildren = 0;
-      this.connectors = {};
+      this.children = new Map();
+      this.connectors = new Map();
       this.radius = radius; // the radius as stored in the database
       this.x = x;
       this.y = y;
@@ -1244,7 +1214,7 @@
 
     ptype.AbstractConnectorNode = function() {
       // For drawing:
-      this.markerType = SkeletonAnnotations.TracingOverlay.Settings.session.connector_node_marker;
+      this.markerType = CATMAID.TracingOverlay.Settings.session.connector_node_marker;
       this.NODE_RADIUS = this.markerType === 'disc' ? 8 : 15;
 
       this.CATCH_RADIUS = 0;
@@ -1322,7 +1292,7 @@
       };
 
       /**
-       * Suspend all links to disable mouse events.
+       * Suspend all links to disable pointer events.
        */
       this.suspend = function() {
         for (var i=0, imax=this.edges.length; i<imax; ++i) {
@@ -1333,7 +1303,7 @@
       /** Disables the ArrowLine object and removes entries from the lines list. */
       this.removeConnectorArrows = function() {
         if (this.edges) {
-          var disable = ptype.ElementPool.prototype.disableFn;
+          var disable = ElementPool.prototype.disableFn;
           for (var i=0, imax=this.edges.length; i<imax; ++i) {
             disable(this.edges[i]);
           }
@@ -1345,7 +1315,7 @@
         this.id = null;
         if (this.c) {
           this.c.node = null;
-          ptype.mouseEventManager.forget(this.c, SkeletonAnnotations.TYPE_CONNECTORNODE);
+          ptype.pointerEventManager.forget(this.c, SkeletonAnnotations.TYPE_CONNECTORNODE);
           this.c.parent.removeChild(this.c);
           this.c.destroy();
           this.c = null;
@@ -1404,7 +1374,7 @@
         }
 
         for (var i=0, imax=this.edges; i<imax; ++i) {
-          this.edges[i].updateVisibility(this);
+          this.edges[i].updateVisibility(this, false);
         }
       };
 
@@ -1453,13 +1423,13 @@
        */
       this.initTextures = function(force) {
         var oldMarkerType = this.markerType;
-        this.markerType = SkeletonAnnotations.TracingOverlay.Settings.session.connector_node_marker;
+        this.markerType = CATMAID.TracingOverlay.Settings.session.connector_node_marker;
         force = force && (oldMarkerType === 'disc' ^ this.markerType === 'disc');
         this.NODE_RADIUS = this.markerType === 'disc' ? 8 : 15;
         var g = this.makeMarker();
 
         var tracingOverlay = this.overlayGlobals.tracingOverlay;
-        var texture = tracingOverlay.pixiLayer._context.renderer.generateTexture(g, PIXI.SCALE_MODES.DEFAULT, 1);
+        var texture = tracingOverlay.pixiLayer._context.renderer.generateTexture(g, PIXI.settings.SCALE_MODES, 1);
 
         if (!force && this.NODE_TEXTURE) {
           var oldBaseTexture = this.NODE_TEXTURE.baseTexture;
@@ -1528,13 +1498,17 @@
      * Below, the function() is but a namespace that returns a manager object
      * with functions attach and forget.
     */
-    ptype.mouseEventManager = new (function()
+    ptype.pointerEventManager = new (function()
     {
-      /** Variables used for mouse events, which involve a single node at a time.
+      /** Variables used for pointer events, which involve a single node at a time.
        * Includes node.x, node.y, node.id and node.c
        * These are set at mc_start, then used at mc_move, and set to null at mc_up. */
       var o = null;
       var dragging = false;
+
+      // Used to tell competing event handlers that another handler is currently
+      // working on handling a previous event.
+      var handlingPrimaryEvent = false;
 
       var is_middle_click = function(e) {
         return 1 === e.button;
@@ -1543,9 +1517,17 @@
       /**
        * Here 'this' is the node's circle graphics, and node is the Node instance
        */
-      this.mc_click = function(event) {
+      var mc_click = function(event) {
+        // Stop both the Pixi event and the DOM event from propagation.
+        // Otherwise other Pixi elements can receive this event as well.
+        event.stopPropagation();
+
+        // Only handle one UI element event at a time.
+        if (handlingPrimaryEvent) {
+          return;
+        }
+
         var e = event.data.originalEvent;
-        e.stopPropagation();
         e.preventDefault();
         var catmaidTracingOverlay = SkeletonAnnotations.getTracingOverlayBySkeletonElements(this.node.overlayGlobals.skeletonElements);
         if (catmaidTracingOverlay.ensureFocused()) {
@@ -1570,9 +1552,37 @@
             // connected activated treenode or connectornode
             // to existing treenode or connectornode
             if (atnType === SkeletonAnnotations.TYPE_CONNECTORNODE) {
-              var atnSubType = SkeletonAnnotations.getActiveNodeSubType();
-              if ((e.altKey && !e.shiftKey) ||
-                  atnSubType === CATMAID.Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR) {
+              let atnSubType = SkeletonAnnotations.getActiveNodeSubType();
+              let connectorNode = catmaidTracingOverlay.nodes.get(atnID);
+
+              // If the Alt key is pressed, we want to show a menu for
+              // connector type selection.
+              if (e.altKey && !e.shiftKey) {
+                if (!CATMAID.mayEdit()) {
+                  CATMAID.error("You lack permissions to add links between node #" +
+                      node.id + " and connector #" + atnID);
+                  return;
+                }
+                catmaidTracingOverlay.askForConnectorType()
+                  .then(function(selection) {
+                    if (selection) {
+                      // Don't allow link combinations that would result in a
+                      // mixed connector type.
+                      if (connectorNode.links && connectorNode.links.length > 0 &&
+                          connectorNode.subtype !== selection.value) {
+                        throw new CATMAID.Warning(`Can't mix connector types ` +
+                            `${connectorNode.subtype} and ${selection.value}`);
+                      }
+                      connectorNode.subtype = selection.value;
+                      catmaidTracingOverlay.createLink(node.id, atnID,
+                          selection.relation);
+                    }
+                  })
+                  .catch(CATMAID.handleError);
+                return;
+              }
+
+              if (atnSubType === CATMAID.Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR) {
                 if (!CATMAID.mayEdit()) {
                   CATMAID.error("You lack permissions to declare node #" + node.id +
                       " as having a gap junction with connector #" + atnID);
@@ -1581,6 +1591,26 @@
                 // careful, atnID is a connector
                 SkeletonAnnotations.atn.subtype = CATMAID.Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR;
                 catmaidTracingOverlay.createLink(node.id, atnID, "gapjunction_with")
+                  .catch(CATMAID.handleError);
+              } else if (atnSubType === CATMAID.Connectors.SUBTYPE_TIGHTJUNCTION_CONNECTOR) {
+                if (!CATMAID.mayEdit()) {
+                  CATMAID.error("You lack permissions to declare node #" + node.id +
+                      " as having a tight junction with connector #" + atnID);
+                  return;
+                }
+                // careful, atnID is a connector
+                SkeletonAnnotations.atn.subtype = CATMAID.Connectors.SUBTYPE_TIGHTJUNCTION_CONNECTOR;
+                catmaidTracingOverlay.createLink(node.id, atnID, "tightjunction_with")
+                  .catch(CATMAID.handleError);
+              } else if (atnSubType === CATMAID.Connectors.SUBTYPE_DESMOSOME_CONNECTOR) {
+                if (!CATMAID.mayEdit()) {
+                  CATMAID.error("You lack permissions to declare node #" + node.id +
+                      " linked to desmosome connector #" + atnID);
+                  return;
+                }
+                // careful, atnID is a connector
+                SkeletonAnnotations.atn.subtype = CATMAID.Connectors.SUBTYPE_DESMOSOME_CONNECTOR;
+                catmaidTracingOverlay.createLink(node.id, atnID, "desmosome_with")
                   .catch(CATMAID.handleError);
               }  else if (atnSubType === CATMAID.Connectors.SUBTYPE_SYNAPTIC_CONNECTOR) {
                 if (!CATMAID.mayEdit()) {
@@ -1643,7 +1673,7 @@
         if (e.shiftKey) return;
         if (!checkNodeID(this)) return;
 
-        // Prevent node related mouse move handling if the naviation mode is
+        // Prevent node related pointer move handling if the naviation mode is
         // enabled.
         if (SkeletonAnnotations.currentmode === SkeletonAnnotations.MODES.MOVE) {
           return;
@@ -1659,8 +1689,8 @@
 
         var newPosition = o.data.getLocalPosition(this.parent);
         if (!dragging) {
-          var l1Distance = Math.abs(newPosition.x - node[node.planeX()])
-                         + Math.abs(newPosition.y - node[node.planeY()]);
+          var l1Distance = Math.abs(newPosition.x - node[node.planeX])
+                         + Math.abs(newPosition.y - node[node.planeY]);
           if (l1Distance > node.stackScaling * 0.5) {
             dragging = true;
             this.alpha = 0.7;
@@ -1669,7 +1699,6 @@
           }
         }
 
-        e.stopPropagation();
         e.preventDefault();
 
         if (!CATMAID.mayEdit() || !node.canEdit()) {
@@ -1680,24 +1709,21 @@
         if (o.id !== SkeletonAnnotations.getActiveNodeId()) return;
 
         // TODO
-        this.x = node[node.planeX()] = newPosition.x;
-        this.y = node[node.planeY()] = newPosition.y;
+        this.x = node[node.planeX] = newPosition.x;
+        this.y = node[node.planeY] = newPosition.y;
         if (this.node.radiusGraphics) {
-          this.node.radiusGraphics.x = node[node.planeX()];
-          this.node.radiusGraphics.y = node[node.planeY()];
+          this.node.radiusGraphics.x = node[node.planeX];
+          this.node.radiusGraphics.y = node[node.planeY];
         }
         node.drawEdges(true); // TODO for connector this is overkill
         // Update postsynaptic edges from connectors. Suprisingly this brute
         // approach of iterating through all nodes is sufficiently fast.
         // TODO: A two-way map would be ergonomic and speed up ops like this.
         if (node.type === SkeletonAnnotations.TYPE_NODE) {
-          for (var connID in catmaidTracingOverlay.nodes) {
-            if (catmaidTracingOverlay.nodes.hasOwnProperty(connID)) {
-              var conn = catmaidTracingOverlay.nodes[connID];
-              if (conn.type === SkeletonAnnotations.TYPE_CONNECTORNODE) {
-                if (conn.links.some(linkedToNode, node)) {
-                  conn.drawEdges(true);
-                }
+          for (var conn of catmaidTracingOverlay.nodes.values()) {
+            if (conn.type === SkeletonAnnotations.TYPE_CONNECTORNODE) {
+              if (conn.links.some(linkedToNode, node)) {
+                conn.drawEdges(true);
               }
             }
           }
@@ -1711,10 +1737,6 @@
 
       /** Here `this` is the circle graphic. */
       var mc_up = function(event) {
-        this.removeAllListeners('mousemove')
-            .removeAllListeners('mouseup')
-            .removeAllListeners('mouseupoutside');
-
         var node = this.node;
         var catmaidTracingOverlay = SkeletonAnnotations.getTracingOverlayBySkeletonElements(
             node.overlayGlobals.skeletonElements);
@@ -1725,13 +1747,29 @@
           catmaidTracingOverlay.activateNode(node);
         }
 
+        if (SkeletonAnnotations.TYPE_NODE === node.type) {
+          this.removeListener("pointerup", mc_click);
+          this.removeListener("pointerupoutside", mc_click);
+        } else {
+          // SkeletonAnnotations.TYPE_CONNECTORNODE
+          this.removeListener("pointerup", connector_mc_click);
+          this.removeListener("pointerupoutside", connector_mc_click);
+        }
+
+        this.removeAllListeners('pointermove')
+            .removeAllListeners('pointerout')
+            .removeAllListeners('pointerleave')
+            .removeAllListeners('pointercancel')
+            .removeListener('pointerup', mc_up)
+            .removeListener('pointerupoutside', mc_up);
+
         if (!dragging) {
           o = null;
           return;
         }
         dragging = false;
         var e = event.data.originalEvent;
-        e.stopPropagation();
+        e.preventDefault();
         if (!checkNodeID(this)) return;
         o = null;
         var catmaidTracingOverlay = SkeletonAnnotations.getTracingOverlayBySkeletonElements(this.node.overlayGlobals.skeletonElements);
@@ -1761,7 +1799,13 @@
           // Allow middle-click panning
           return;
         }
-        e.stopPropagation();
+
+        // Only handle one UI element event at a time.
+        if (handlingPrimaryEvent) {
+          return;
+        }
+
+        // This is needed to return false from dispatchEvent()
         e.preventDefault();
 
         o = {id: node.id,
@@ -1774,14 +1818,32 @@
           catmaidTracingOverlay.activateNode(node);
         }
 
-        this.on('mousemove', mc_move)
-            .on('mouseup', mc_up)
-            .on('mouseupoutside', mc_up);
+        if (SkeletonAnnotations.TYPE_NODE === node.type) {
+          this.on("pointerupoutside", mc_click);
+        } else if (SkeletonAnnotations.TYPE_CONNECTORNODE === node.type) {
+          this.on("pointerup", connector_mc_click);
+          this.on("pointerupoutside", connector_mc_click);
+        }
+
+        this.on('pointermove', mc_move)
+            .on('pointerup', mc_up)
+            .on('pointerupoutside', mc_up)
+            .on('pointerout', mc_up)
+            .on('pointerleave', mc_up)
+            .on('pointercancel', mc_up);
       };
 
       var connector_mc_click = function(event) {
+        // Stop both the Pixi event and the DOM event from propagation.
+        // Otherwise other Pixi elements can receive this event as well.
+        event.stopPropagation();
+
+        // Only handle one UI element event at a time.
+        if (handlingPrimaryEvent) {
+          return;
+        }
+
         var e = event.data.originalEvent;
-        e.stopPropagation();
         e.preventDefault();
         var catmaidTracingOverlay = SkeletonAnnotations.getTracingOverlayBySkeletonElements(this.node.overlayGlobals.skeletonElements);
         if (catmaidTracingOverlay.ensureFocused()) {
@@ -1792,6 +1854,7 @@
         if (catmaidTracingOverlay.ensureFocused()) {
           return;
         }
+
         // return some log information when clicked on the node
         // this usually refers here to the c object
         if (e.shiftKey || e.altKey) {
@@ -1807,10 +1870,31 @@
               alert("Can not join two connector nodes!");
             } else if (atnType === SkeletonAnnotations.TYPE_NODE) {
               var linkType;
-              if ((e.altKey && !e.shiftKey) ||
-                  connectornode.subtype === CATMAID.Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR) {
+              if (e.altKey && !e.shiftKey) {
+                catmaidTracingOverlay.askForConnectorType()
+                  .then(function(selection) {
+                    if (selection) {
+                      // Don't allow link combinations that would result in a
+                      // mixed connector type.
+                      if (connectornode.links && connectornode.links.length > 0 &&
+                          connectornode.subtype !== selection.value) {
+                        throw new CATMAID.Warning(`Can't mix connector types ` +
+                            `${connectornode.subtype} and ${selection.value}`);
+                      }
+                      connectornode.subtype = selection.value;
+                      return catmaidTracingOverlay.createLink(atnID,
+                          connectornode.id, selection.relation);
+                    }
+                  })
+                  .catch(CATMAID.handleError);
+                return;
+              }
+              if (connectornode.subtype === CATMAID.Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR) {
                 linkType = "gapjunction_with";
-                connectornode.subtype = CATMAID.Connectors.SUBTYPE_GAPJUNCTION_CONNECTOR;
+              } else if (CATMAID.Connectors.SUBTYPE_TIGHTJUNCTION_CONNECTOR === connectornode.subtype) {
+                linkType = "tightjunction_with";
+              } else if (CATMAID.Connectors.SUBTYPE_DESMOSOME_CONNECTOR === connectornode.subtype) {
+                linkType = "desmosome_with";
               } else if (CATMAID.Connectors.SUBTYPE_SYNAPTIC_CONNECTOR === connectornode.subtype) {
                 linkType = (e.altKey ? 'post' : 'pre') + "synaptic_to";
               } else if (CATMAID.Connectors.SUBTYPE_ABUTTING_CONNECTOR === connectornode.subtype) {
@@ -1831,34 +1915,44 @@
       };
 
       this.edge_mc_click = function (event) {
+        // Stop both the Pixi event and the DOM event from propagation.
+        // Otherwise other Pixi elements can receive this event as well.
+        event.stopPropagation();
+
         var e = event.data.originalEvent;
         var catmaidTracingOverlay = SkeletonAnnotations.getTracingOverlayBySkeletonElements(this.node.overlayGlobals.skeletonElements);
         if (catmaidTracingOverlay.ensureFocused()) {
           return;
         }
+
         var node = this.node;
         if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
-          e.stopPropagation();
+          // During handling of the event, we want the line to not deal with other
+          // clicks. This will be reset after the event is handled.
+          if (handlingPrimaryEvent) {
+            return;
+          }
+          handlingPrimaryEvent = true;
+
           e.preventDefault();
+          e.stopPropagation();
           catmaidTracingOverlay.activateNode(node);
-          catmaidTracingOverlay.splitSkeleton(node.id);
+          catmaidTracingOverlay.splitSkeleton(node.id)
+            .finally(() => {
+              // Unblock click handling
+              handlingPrimaryEvent = false;
+            });
         }
       };
 
       this.attach = function(mc, type) {
-        mc.on('mousedown', mc_start);
-
-        if (SkeletonAnnotations.TYPE_NODE === type) {
-          mc.on("click", this.mc_click);
-        } else {
-          // SkeletonAnnotations.TYPE_CONNECTORNODE
-          mc.on("click", connector_mc_click);
-        }
+        mc.on('pointerdown', mc_start);
       };
 
 
-      var trackedEvents = ['mousedown', 'mousemove', 'mouseup',
-          'mouseupoutside', 'click'];
+      var trackedEvents = ['pointerdown', 'pointermove', 'pointerup',
+        'pointerupoutside', 'pointerout', 'pointerleave', 'pointercancel',
+        'click'];
 
       this.forget = function(mc, type) {
         for (var i=0, imax=trackedEvents.length; i<imax; ++i) {
@@ -1873,8 +1967,8 @@
       this.line = new PIXI.Graphics();
       this.overlayGlobals.skeletonElements.containers.arrows.addChild(this.line);
       this.line.interactive = true;
-      this.line.on('mousedown', this.mousedown);
-      this.line.on('mouseover', this.mouseover);
+      this.line.on('pointerdown', this.pointerdown);
+      this.line.on('pointerover', this.pointerover);
       this.line.hitArea = new PIXI.Polygon(0, 0, 0, 0, 0, 0, 0, 0);
       this.line.link = this;
       this.confidence_text = null;
@@ -1889,12 +1983,12 @@
       this.CATCH_SCALE = 3;
       this.CONFIDENCE_FONT_PT = 15;
       this.confidenceFontSize = this.CONFIDENCE_FONT_PT + 'pt';
+      this.scaledConfidenceFontSize = this.CONFIDENCE_FONT_PT + 'pt';
       this.scaling = 1.0;
 
       /** Function to assign to the graphical arrow. */
-      this.mousedown = function (event) {
+      this.pointerdown = function (event) {
         var e = event.data.originalEvent;
-        e.stopPropagation();
         if(!(e.shiftKey && (e.ctrlKey || e.metaKey))) {
           return;
         }
@@ -1920,7 +2014,7 @@
           });
       };
 
-      this.mouseover = function (event) {
+      this.pointerover = function (event) {
         // If this edge is suspended, don't try to retrieve any information.
         if (this.suspended) {
           return;
@@ -1955,6 +2049,10 @@
           });
       };
 
+      // A shared cache for the line normal computation in the update() function
+      // below. This variable is internal to that function.
+      let _updateNormalCache = [null, null];
+
       this.update = function(x1, y1, x2, y2, relationName, confidence, tgtRadius, srcRadius) {
         var xdiff = (x2 - x1);
         var ydiff = (y2 - y1);
@@ -1969,6 +2067,7 @@
 
         var x1new, y1new;
 
+        // Adjust location if a source radius is given or it is > 0
         if (srcRadius) {
           var newXdiff = (x2new - x1);
           var newYdiff = (y2new - y1);
@@ -1988,7 +2087,7 @@
         this.line.lineTo(x2new, y2new);
 
         // Draw arrowhead.
-        var norm = lineNormal(x1, y1, x2, y2);
+        var norm = setLineNormal(x1, y1, x2, y2, _updateNormalCache);
         var s = 1.5 * this.EDGE_WIDTH;
         var x2a = x2new - xdiff * 2 * s / length,
             y2a = y2new - ydiff * 2 * s / length;
@@ -2015,13 +2114,17 @@
         this.line.hitArea.points[7] = y1 - norm[1];
 
         var stroke_color;
-        let settings = SkeletonAnnotations.TracingOverlay.Settings.session;
+        let settings = CATMAID.TracingOverlay.Settings.session;
         if (relationName === 'presynaptic_to') {
           stroke_color = settings.presynaptic_to_rel_color;
         } else if (relationName === 'postsynaptic_to') {
           stroke_color = settings.postsynaptic_to_rel_color;
         } else if (relationName === 'gapjunction_with') {
           stroke_color = settings.gapjunction_rel_color;
+        } else if (relationName === 'tightjunction_with') {
+          stroke_color = settings.tightjunction_rel_color;
+        } else if (relationName === 'desmosome_with') {
+          stroke_color = settings.desmosome_rel_color;
         } else if (relationName === 'attached_to') {
           stroke_color = settings.attachment_rel_color;
         } else if (relationName === 'close_to') {
@@ -2055,7 +2158,7 @@
       };
 
       /**
-       * Suspend all links to disable mouse events.
+       * Suspend all links to disable pointer events.
        */
       this.suspend = function() {
         this.line.suspended = true;
@@ -2084,18 +2187,24 @@
         var connectorRadiusPx = connector.NODE_RADIUS * connector.stackScaling;
         var nodeRadiusPx = node.NODE_RADIUS * node.stackScaling;
         if (outwards) {
-          this.update(node.x, node.y, connector.x, connector.y, relationName, confidence, connectorRadiusPx);
+          // Explicitly pass in a source radius of 0 to not change the parameter
+          // type, which can cause deoptimizations in V8.
+          this.update(node[node.planeX], node[node.planeY],
+              connector[connector.planeX], connector[connector.planeY],
+              relationName, confidence, connectorRadiusPx, 0);
         } else {
-          this.update(connector.x, connector.y, node.x, node.y, relationName, confidence, nodeRadiusPx, connectorRadiusPx);
+          this.update(connector[connector.planeX], connector[connector.planeY],
+              node[node.planeX], node[node.planeY], relationName, confidence,
+              nodeRadiusPx, connectorRadiusPx);
         }
-        this.updateVisibility(connector);
+        this.updateVisibility(connector, false);
       };
 
       this.scale = function(baseScale, resScale, dynamicScale) {
         this.stackScaling = baseScale * resScale * (dynamicScale ? dynamicScale : 1);
         this.scaling = baseScale * (dynamicScale ? dynamicScale : 1);
         this.EDGE_WIDTH = this.BASE_EDGE_WIDTH * this.stackScaling;
-        this.confidenceFontSize = this.CONFIDENCE_FONT_PT * this.stackScaling + 'pt';
+        this.scaledConfidenceFontSize = this.CONFIDENCE_FONT_PT * this.stackScaling + 'pt';
         this.textResolution = resScale;
       };
 
@@ -2108,16 +2217,20 @@
     /** Used for confidence between treenode nodes and confidence between
      * a connector and a treenode. */
     (function(classes) {
+      // Cache for confidence text textures by confidence number.
       var confidenceTextCache = {};
+      // Cache for line normal computation to avoid recreation of this array on
+      // every call.
+      var norm = [null, null];
 
       var updateConfidenceText = function (x, y,
                                            parentx, parenty,
                                            fillColor,
                                            confidence,
                                            existing) {
+        setLineNormal(x, y, parentx, parenty, norm);
         var text,
             numberOffset = 0.8 * this.CONFIDENCE_FONT_PT * this.stackScaling,
-            norm = lineNormal(x, y, parentx, parenty),
             newConfidenceX = (x + parentx) / 2 + norm[0] * numberOffset,
             newConfidenceY = (y + parenty) / 2 + norm[1] * numberOffset;
 
@@ -2132,7 +2245,7 @@
           cachedText.alpha = 1.0;
           cachedText.resolution = this.textResolution;
           var texture = this.overlayGlobals.tracingOverlay.pixiLayer._context.renderer.generateTexture(
-              cachedText, PIXI.SCALE_MODES.DEFAULT, 1);
+              cachedText, PIXI.settings.SCALE_MODES, 1);
           confidenceTextCache[confidence] = cachedText;
         } else if (cachedText.style.fontSize !== this.confidenceFontSize) {
           cachedText.style = {
@@ -2142,7 +2255,7 @@
               baseline: 'middle'};
           cachedText.resolution = this.textResolution;
           var texture = this.overlayGlobals.tracingOverlay.pixiLayer._context.renderer.generateTexture(
-              cachedText, PIXI.SCALE_MODES.DEFAULT, 1);
+              cachedText, PIXI.settings.SCALE_MODES, 1);
         }
 
         if (existing) {
@@ -2155,8 +2268,8 @@
           this.line.addChild(text);
         }
 
-        text.x = newConfidenceX;
-        text.y = newConfidenceY;
+        text.scale.set(this.stackScaling, this.stackScaling);
+        text.position.set(newConfidenceX, newConfidenceY);
         text.tint = fillColor;
 
         return text;
@@ -2171,4 +2284,63 @@
 
     return ptype;
   };
+
+
+  /**
+   * A simple pool for reusing objects such as DOM elements, which are expensive
+   * to insert and remove.
+   */
+  var ElementPool = function(reserveSize, reserveProportion) {
+    this.pool = [];
+    this.nextIndex = 0;
+    this.reserveSize = reserveSize;
+    this.reserveProportion = reserveProportion;
+  };
+
+  ElementPool.prototype.reset = function() {
+    this.nextIndex = 0;
+  };
+
+  ElementPool.prototype.obliterateFn = function(element) {
+    element.obliterate();
+  };
+
+  ElementPool.prototype.disableFn = function(element) {
+    element.disable();
+  };
+
+  ElementPool.prototype.clear = function() {
+    this.pool.splice(0).forEach(this.obliterateFn);
+    this.reset();
+  };
+
+  ElementPool.prototype.disableBeyond = function(newLength) {
+    if (newLength < this.pool.length) {
+      var reserve = Math.max(newLength + this.reserveSize,
+                             Math.floor(newLength * this.reserveProportion));
+      // Drop elements beyond new length plus reserve
+      if (this.pool.length > reserve) {
+        this.pool.splice(reserve).forEach(this.obliterateFn);
+      }
+      // Disable elements from cut off to new ending of node pool array
+      for (var i=newLength; i<this.pool.length; ++i) {
+        this.pool[i].disable();
+      }
+    }
+  };
+
+  ElementPool.prototype.next = function() {
+    return this.nextIndex < this.pool.length ?
+      this.pool[this.nextIndex++] : null;
+  };
+
+  /**
+   * Append a new element at the end, implying that all other elements are in
+   * use.
+   */
+  ElementPool.prototype.push = function(element) {
+    this.pool.push(element);
+    this.nextIndex += 1;
+  };
+
 })(CATMAID);

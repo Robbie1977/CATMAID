@@ -16,12 +16,15 @@ var WindowMaker = new function()
   // A serializer to stringify widget state.
   var stateSerializer = new CATMAID.JsonSerializer();
 
-  var createContainer = function(id) {
+  var createContainer = function(id, expandContent) {
     var container = document.createElement("div");
     if (id) {
       container.setAttribute("id", id);
     }
-    container.setAttribute("class", "windowContent");
+    container.classList.add("windowContent");
+    if (!expandContent) {
+      container.classList.add("padded-content");
+    }
     return container;
   };
 
@@ -139,26 +142,33 @@ var WindowMaker = new function()
 
   /**
    * Get content height of a window and take into account a potential button
-   * panel. If a button panel ID or element is provided, its height is
-   * substracted from the window content height.
+   * panel. If a button panel class is provided, the height of all visible
+   * elements of this class will be substracted from the window content height.
    */
-  var getWindowContentHeight = function(win, buttonPanel) {
-    var height = win.getContentHeight();
-    if (buttonPanel !== undefined) {
-      var $bar = typeof(buttonPanel) === "string" ? $('#' + buttonPanel) : $(buttonPanel);
-      height = height - ($bar.is(':visible') ? $bar.height() : 0);
+  var getWindowContentHeight = function(win, panelSelector = '.windowpanel') {
+    let height = win.getContentHeight();
+    if (panelSelector) {
+      let panels = win.getFrame().querySelectorAll(panelSelector);
+      let totalPanelHeight = 0;
+      for (let panel of panels) {
+        if ($(panel).is(':visible')) {
+          totalPanelHeight += panel.getBoundingClientRect().height;
+        }
+      }
+      // Update content height
+      height = height - totalPanelHeight;
     }
     return height;
   };
 
-  var addListener = function(win, container, button_bar, destroy, resize, focus) {
+  var addListener = function(win, container, destroy, resize, focus) {
     win.addListener(
       function(callingWindow, signal) {
 
         // Keep track of scroll bar pixel position and ratio to total container
         // height to maintain scoll bar location on resize. From:
         // http://jsfiddle.net/JamesKyle/RmNap/
-        var contentHeight = getWindowContentHeight(win, button_bar);
+        var contentHeight = getWindowContentHeight(win);
         var $container = $(container);
         var scrollPosition = $container.scrollTop();
         var scrollRatio = scrollPosition / contentHeight;
@@ -187,7 +197,7 @@ var WindowMaker = new function()
             }
             break;
           case CMWWindow.RESIZE:
-            contentHeight = getWindowContentHeight(win, button_bar);
+            contentHeight = getWindowContentHeight(win);
             container.style.height = contentHeight + "px";
             container.style.width = ( win.getAvailableWidth() + "px" );
 
@@ -216,8 +226,14 @@ var WindowMaker = new function()
 
     /* be the first window */
     var rootWindow = CATMAID.rootWindow;
-    if (rootWindow.getFrame().parentNode != document.body) {
-      document.body.appendChild(rootWindow.getFrame());
+
+    let windowContainer = document.getElementById("windows");
+    if (!windowContainer) {
+      throw new CATMAID.ValueError("Could not find window container");
+    }
+
+    if (rootWindow.getFrame().parentNode != windowContainer) {
+      windowContainer.appendChild(rootWindow.getFrame());
       document.getElementById("content").style.display = "none";
     }
 
@@ -272,8 +288,12 @@ var WindowMaker = new function()
     container.style.backgroundColor = "#ffffff";
 
     // Add a button to open help documentation if it is provided by the widget.
-    if (config.helpText) {
-      DOM.addHelpButton(win, 'Help: ' + instance.getName(), config.helpText);
+    if (config.helpText || config.helpPath) {
+      let exteHelpContentUrl;
+      if (config.helpPath) {
+        exteHelpContentUrl = CATMAID.makeStaticURL(`html/doc/widgets/${config.helpPath}`);
+      }
+      DOM.addHelpButton(win, 'Help: ' + instance.getName(), config.helpText, exteHelpContentUrl);
     }
 
     // Widgets can announce they have filtering support
@@ -301,14 +321,14 @@ var WindowMaker = new function()
       if (config.controlsID) {
         controls.setAttribute("id", config.controlsID);
       }
-      controls.setAttribute("class", "buttonpanel");
+      controls.classList.add('windowpanel', 'buttonpanel');
       config.createControls.call(instance, controls);
       container.appendChild(controls);
       DOM.addButtonDisplayToggle(win);
     }
 
     // Create content, ID and createContent() are optional
-    var content = createContainer(config.contentID);
+    var content = createContainer(config.contentID, config.expandContent);
     if (config.class) {
       $(content).addClass(config.class);
     }
@@ -324,7 +344,7 @@ var WindowMaker = new function()
     var destroy = wrapSaveState(instance, instance.destroy);
     var resize = instance.resize ? instance.resize.bind(instance) : undefined;
     var focus = instance.focus ? instance.focus.bind(instance) : undefined;
-    addListener(win, content, controls, destroy, resize, focus);
+    addListener(win, content, destroy, resize, focus);
     addLogic(win);
 
     if (CATMAID.tools.isFn(config.init)) {
@@ -334,24 +354,21 @@ var WindowMaker = new function()
     return {window: win, widget: instance};
   };
 
-  var createConnectivityMatrixWindow = function(instance) {
-    var CM = instance ? instance : new CATMAID.ConnectivityMatrixWidget();
-    return createWidget(CM);
-  };
-
   /** Creates and returns a new 3d webgl window */
-  var create3dWebGLWindow = function()
+  var create3dWebGLWindow = function(options)
   {
-    if ( !Detector.webgl ) {
+    if ( !WEBGL.isWebGLAvailable() ) {
       throw new CATMAID.NoWebGLAvailableError("The 3D Viewer requires WebGL, but it is not available");
     }
+
+    if (!options) options = { selectionTable: true };
 
     CATMAID.throwOnInsufficientWebGlContexts(1);
 
     // A selection table is opened alongside the 3D viewer. Initialize it first,
     // so that it will default to the last opened skeleton source to pull from
     // (which otherwise would be the 3D viewer).
-    var selectionTable = WindowMaker.create('selection-table');
+    var selectionTable = options.selectionTable ? WindowMaker.create('selection-table') : null;
 
     var WA = new CATMAID.WebGLApplication();
 
@@ -363,7 +380,7 @@ var WindowMaker = new function()
 
     var bar = document.createElement( "div" );
     bar.id = "3d_viewer_buttons";
-    bar.setAttribute('class', 'buttonpanel');
+    bar.classList.add('windowpanel', 'buttonpanel');
     DOM.addFilterControlsToggle(win, 'Filter: ' +
         WA.getName(), {
           rules: WA.filterRules,
@@ -407,11 +424,42 @@ var WindowMaker = new function()
     connectorRestrictions.appendChild(document.createTextNode('Connector restriction'));
     connectorRestrictions.appendChild(connectorRestrictionsSl);
 
+    let vrLabel = document.createElement('label');
+    let vrCheckbox = document.createElement('input');
+    vrCheckbox.type = 'checkbox';
+    vrCheckbox.onclick = () => WA.webVRSetup(vrButton, vrCheckbox);
+    vrLabel.appendChild(vrCheckbox);
+    vrLabel.appendChild(document.createTextNode('VR'));
+    let vrButton = document.createElement('button');
+    vrButton.textContent = 'Enter';
+    vrButton.disabled = true;
+    let vrGroup = document.createElement('span');
+    vrGroup.setAttribute('style', 'white-space:nowrap');
+    vrGroup.appendChild(vrLabel);
+    vrGroup.appendChild(vrButton);
+
     var viewControls = DOM.appendToTab(tabs['View'],
         [
           ['Center active', WA.look_at_active_node.bind(WA)],
           ['Follow active', o.follow_active, function() { WA.setFollowActive(this.checked); }, false],
           ['Update active',  o.update_active, function() { WA.setUpdateActive(this.checked); }, false],
+          {
+            type: 'button',
+            label: 'Focus skeleton',
+            title: 'Look at active skeleton\'s center of mass from current camera location',
+            onclick: function() {
+              let activeSkeletonId = SkeletonAnnotations.getActiveSkeletonId();
+              if (activeSkeletonId) {
+                if (WA.hasSkeleton(activeSkeletonId)) {
+                  WA.lookAtSkeleton(activeSkeletonId);
+                } else {
+                  CATMAID.warn('Active skeleton not loaded in 3D Viewer');
+                }
+              } else {
+                CATMAID.warn('No skeleton selected!');
+              }
+            }
+          },
           ['XY', WA.XYView.bind(WA)],
           ['XZ', WA.XZView.bind(WA)],
           ['ZY', WA.ZYView.bind(WA)],
@@ -419,8 +467,9 @@ var WindowMaker = new function()
           [storedViewsSelect],
           ['Save view', storeView],
           ['Fullscreen', WA.fullscreenWebGL.bind(WA)],
+          [vrGroup],
           [connectorRestrictions],
-          ['Refresh active skeleton', WA.updateActiveSkeleton.bind(WA)],
+          ['Refresh active skeleton', function() { WA.updateActiveSkeleton(); }],
           ['Orthographic mode', false, function() { WA.updateCameraView(this.checked); }, false],
           ['Lock view', false, function() { WA.options.lock_view = this.checked;  }, false],
         ]);
@@ -526,6 +575,12 @@ var WindowMaker = new function()
      ['own-reviewed', 'Own Reviewed'],
      ['last-reviewed', 'Last Reviewer'],
      ['axon-and-dendrite', 'Axon and dendrite'],
+     ['x-lut', 'X Width rainbow'],
+     ['y-lut', 'Y Height rainbow'],
+     ['z-lut', 'Z Depth rainbow'],
+     ['skeleton-x-lut', 'X Width rainbow per skeleton'],
+     ['skeleton-y-lut', 'Y Height rainbow per skeleton'],
+     ['skeleton-z-lut', 'Z Depth rainbow per skeleton'],
      ['sampler-domains', 'Reconstrucion sampler domains'],
      ['binary-sampler-intervals', 'Reconstrucion sampler intervals (2 colors)'],
      ['multicolor-sampler-intervals', 'Reconstrucion sampler intervals (11 colors)']
@@ -544,10 +599,12 @@ var WindowMaker = new function()
      ['N with partner: pre[red > blue], post[yellow > cyan]', 'by-amount'],
      ['Synapse clusters', 'synapse-clustering'],
      ['Max. flow cut: axon (green) and dendrite (blue)', 'axon-and-dendrite'],
-     ['Same as skeleton', 'skeleton']
+     ['Same as skeleton', 'skeleton'],
+     ['Polyadicity', 'global-polyadicity'],
+     ['Custom', 'custom']
     ].forEach(function(e, i) {
        var selected = o.connector_color === e[1];
-       synColors.options.add(new Option(e[1], e[1], selected, selected));
+       synColors.options.add(new Option(e[0], e[1], selected, selected));
     });
     if (synColors.selectedIndex === -1) {
       synColors.selectedIndex = 0;
@@ -581,16 +638,47 @@ var WindowMaker = new function()
       };
     };
 
-    var updateLandmarkGroupColor = function(volumeId, rgb, alpha, colorChanged,
+    var updateLandmarkGroupColor = function(landmarkGroupId, rgb, alpha, colorChanged,
         alphaChanged, colorHex) {
-      WA.setLandmarkGroupColor(volumeId,
+      WA.setLandmarkGroupColor(landmarkGroupId,
           colorChanged ? ('#' + colorHex) : null,
           alphaChanged ? alpha : null);
     };
 
-    var updateLandmarkGroupFaces = function(volumeId, e) {
+    var updateLandmarkGroupFaces = function(landmarkGroupId, e) {
       var facesVisible = e.target.checked;
-      WA.setLandmarkGroupStyle(volumeId, facesVisible);
+      WA.setLandmarkGroupStyle(landmarkGroupId, "faces", facesVisible);
+      // Stop propagation or the general landmark group list change handler is
+      // called.
+      e.stopPropagation();
+    };
+
+    var updateLandmarkGroupBb = function(landmarkGroupId, e) {
+      var showBb = e.target.checked;
+      WA.setLandmarkGroupBoundingBox(landmarkGroupId, showBb);
+      // Stop propagation or the general volume list change handler is called.
+      e.stopPropagation();
+    };
+
+
+    var updateLandmarkGroupText = function(landmarkGroupId, e) {
+      var textVisible = e.target.checked;
+      WA.setLandmarkGroupStyle(landmarkGroupId, "text", textVisible);
+      // Stop propagation or the general landmark group list change handler is
+      // called.
+      e.stopPropagation();
+    };
+
+    var updatePointCloudColor = function(pointCloudId, rgb, alpha, colorChanged,
+        alphaChanged, colorHex) {
+      WA.setPointCloudColor(pointCloudId,
+          colorChanged ? ('#' + colorHex) : null,
+          alphaChanged ? alpha : null);
+    };
+
+    var updatePointCloudFaces = function(pointCloudId, e) {
+      var facesVisible = e.target.checked;
+      WA.setPointCloudStyle(pointCloudId, "faces", facesVisible);
       // Stop propagation or the general landmark group list change handler is
       // called.
       e.stopPropagation();
@@ -610,58 +698,73 @@ var WindowMaker = new function()
       e.stopPropagation();
     };
 
-    // Update volume list
-    var initVolumeList = function() {
-      return CATMAID.Volumes.listAll(project.id).then(function(json) {
-          var volumes = json.sort(function(a, b) {
-            return CATMAID.tools.compareStrings(a.name, b.name);
-          }).map(function(volume) {
-            return {
-              title: volume.name,
-              value: volume.id
-            };
-          });
-          var selectedVolumes = WA.getLoadedVolumeIds();
-          // Create actual element based on the returned data
-          var node = DOM.createCheckboxSelect('Volumes', volumes,
-              selectedVolumes, true);
-          // Add a selection handler
-          node.onchange = function(e) {
-            var visible = e.target.checked;
-            var volumeId = e.target.value;
-            WA.showVolume(volumeId, visible);
-
-            // Add extra display controls for enabled volumes
-            var li = e.target.closest('li');
-            if (!li) {
-              return;
-            }
-            if (visible) {
-              var volumeControls = li.appendChild(document.createElement('span'));
-              volumeControls.setAttribute('data-role', 'volume-controls');
-              CATMAID.DOM.appendColorButton(volumeControls, 'c',
-                'Change the color of this volume',
-                undefined, undefined, {
-                  initialColor: o.meshes_color,
-                  initialAlpha: o.meshes_opacity,
-                  onColorChange: updateVolumeColor.bind(null, volumeId)
-                });
-              var facesCb = CATMAID.DOM.appendCheckbox(volumeControls, "Faces",
-                  "Whether faces should be displayed for this volume",
-                  o.meshes_faces, updateVolumeFaces.bind(null, volumeId));
-              facesCb.style.display = 'inline';
-            } else {
-              var volumeControls = li.querySelector('span[data-role=volume-controls]');
-              if (volumeControls) {
-                li.removeChild(volumeControls);
-              }
-            }
-          };
-          return node;
-        });
+    var updateVolumeSubiv = function(volumeId, smooth, subdivisions) {
+      var subdiv = smooth ? (subdivisions === undefined ? 3 : subdivisions) : 0;
+      WA.setVolumeSubdivisions(volumeId, subdiv);
     };
 
-    // Update volume list
+    var updateVolumeBb = function(volumeId, e) {
+      var showBb = e.target.checked;
+      WA.setVolumeBoundingBox(volumeId, showBb);
+      // Stop propagation or the general volume list change handler is called.
+      e.stopPropagation();
+    };
+
+    function setVolumeEntryVisible(li, volumeId, visible, faces, color, alpha,
+        subdiv, bb) {
+      // Add extra display controls for enabled volumes
+      if (!li) {
+        return;
+      }
+      if (visible) {
+        var volumeControls = li.appendChild(document.createElement('span'));
+        volumeControls.setAttribute('data-role', 'volume-controls');
+        CATMAID.DOM.appendColorButton(volumeControls, 'c',
+          'Change the color of this volume',
+          undefined, undefined, {
+            initialColor: color,
+            initialAlpha: alpha,
+            onColorChange: updateVolumeColor.bind(null, volumeId)
+          });
+
+        var facesCb = CATMAID.DOM.appendCheckbox(volumeControls, "Faces",
+            "Whether faces should be displayed for this volume",
+            faces, updateVolumeFaces.bind(null, volumeId));
+        facesCb.style.display = 'inline';
+
+        // Make sure a change signal is not propagated, otherwise the menu
+        // closes.
+        var subdivInput = CATMAID.DOM.createNumericField(undefined, ' ',
+            "The number of subdivisions to use.", '3', undefined,
+            (e) => {
+              updateVolumeSubiv(volumeId, subdivCb.querySelector('input').checked, e.target.value);
+              e.stopPropagation();
+            },
+            3, undefined, !!subdiv, 1, 0, undefined, undefined);
+
+        var subdivCb = CATMAID.DOM.appendCheckbox(volumeControls, "Subdivide",
+            "Whether meshes should be smoothed by subdivision",
+            !!subdiv, (e) => {
+              updateVolumeSubiv(volumeId, e.target.checked, parseInt(subdivInput.querySelector('input').value));
+              // Stop propagation or the general volume list change handler is called.
+              e.stopPropagation();
+            });
+        subdivCb.style.display = 'inline';
+        volumeControls.appendChild(subdivInput);
+
+        var bbCb = CATMAID.DOM.appendCheckbox(volumeControls, "BB",
+            "Whether or not to show the bounding box of this mesh",
+            !!bb, updateVolumeBb.bind(null, volumeId));
+        bbCb.style.display = 'inline';
+      } else {
+        var volumeControls = li.querySelector('span[data-role=volume-controls]');
+        if (volumeControls) {
+          li.removeChild(volumeControls);
+        }
+      }
+    }
+
+    // Update landmark list
     var initLandmarkList = function() {
       return CATMAID.Landmarks.listGroups(project.id).then(function(json) {
           var landmarkGroups = json.sort(function(a, b) {
@@ -701,6 +804,14 @@ var WindowMaker = new function()
                   "Whether faces should be displayed for this landmark group",
                   o.landmarkgroup_faces, updateLandmarkGroupFaces.bind(null, landmarkGroupId));
               facesCb.style.display = 'inline';
+              var namesCb = CATMAID.DOM.appendCheckbox(landmarkGroupControls, "Names",
+                  "Whether landmark names should be displayed for this landmark group",
+                  o.landmarkgroup_text, updateLandmarkGroupText.bind(null, landmarkGroupId));
+              namesCb.style.display = 'inline';
+              var bbCb = CATMAID.DOM.appendCheckbox(landmarkGroupControls, "BB",
+                  "Whether or not to show the bounding box of this landmark group",
+                  o.landmarkgroup_bb, updateLandmarkGroupBb.bind(null, landmarkGroupId));
+              bbCb.style.display = 'inline';
             } else {
               var landmarkGroupControls = li.querySelector('span[data-role=landmarkGroup-controls]');
               if (landmarkGroupControls) {
@@ -712,11 +823,80 @@ var WindowMaker = new function()
         });
     };
 
+    // Update point cloud list
+    var initPointCloudList = function() {
+      return CATMAID.Pointcloud.listAll(project.id, true, false, 'name').then(function(json) {
+          var pointClouds = json.map(function(pointCloud) {
+            return {
+              title: pointCloud.name + ' (' + pointCloud.id + ')',
+              value: pointCloud.id
+            };
+          });
+          var selectedPointClouds = WA.getLoadedPointCloudIds();
+          // Create actual element based on the returned data
+          var node = DOM.createCheckboxSelect('Point clouds', pointClouds,
+              selectedPointClouds, true);
+          // Add a selection handler
+          node.onchange = function(e) {
+            var visible = e.target.checked;
+            var pointCloudId = e.target.value;
+            WA.showPointCloud(pointCloudId, visible);
+
+            // Add extra display controls for enabled volumes
+            var li = e.target.closest('li');
+            if (!li) {
+              return;
+            }
+            if (visible) {
+              var pointCloudControls = li.appendChild(document.createElement('span'));
+              pointCloudControls.setAttribute('data-role', 'pointcloud-controls');
+              CATMAID.DOM.appendColorButton(pointCloudControls, 'c',
+                'Change the color of this point cloud',
+                undefined, undefined, {
+                  initialColor: o.landmarkgroup_color,
+                  initialAlpha: o.landmarkgroup_opacity,
+                  onColorChange: updatePointCloudColor.bind(null, pointCloudId)
+                });
+              var facesCb = CATMAID.DOM.appendCheckbox(pointCloudControls, "Faces",
+                  "Whether faces should be displayed for this point cloud",
+                  o.pointcloud_faces, updatePointCloudFaces.bind(null, pointCloudId));
+              facesCb.style.display = 'inline';
+            } else {
+              var pointCloudControls = li.querySelector('span[data-role=pointcloud-controls]');
+              if (pointCloudControls) {
+                li.removeChild(pointCloudControls);
+              }
+            }
+          };
+          return node;
+        });
+    };
+
     // Create async selection and wrap it in container to have handle on initial
     // DOM location
-    var volumeSelection = DOM.createAsyncPlaceholder(initVolumeList());
-    var volumeSelectionWrapper = document.createElement('span');
-    volumeSelectionWrapper.appendChild(volumeSelection);
+    var volumeSelectionWrapper = CATMAID.createVolumeSelector({
+      mode: "checkbox",
+      selectedVolumeIds: WA.getLoadedVolumeIds(),
+      select: function(volumeId, visible, element){
+        WA.showVolume(volumeId, visible, undefined, undefined, o.meshes_faces)
+          .catch(CATMAID.handleError);
+
+        setVolumeEntryVisible(element.closest('li'), volumeId, visible,
+            o.meshes_faces, o.meshes_color, o.meshes_opacity,
+            o.meshes_subdiv, o.meshes_boundingbox);
+      },
+      rowCallback: function(row, id, visible) {
+        let loadedVolume = WA.loadedVolumes.get(id);
+        let faces, color, alpha, subdiv, bb;
+        if (loadedVolume) {
+          faces = loadedVolume.faces;
+          color = loadedVolume.color;
+          alpha = loadedVolume.opacity;
+          subdiv = loadedVolume.subdiv;
+          bb = loadedVolume.boundingBox;
+        }
+      }
+    });
 
     // Create async selection and wrap it in container to have handle on initial
     // DOM location
@@ -724,13 +904,24 @@ var WindowMaker = new function()
     var landmarkGroupSelectionWrapper = document.createElement('span');
     landmarkGroupSelectionWrapper.appendChild(landmarkGroupSelection);
 
+    // Create async selection and wrap it in container to have handle on initial
+    // DOM location
+    var pointCloudSelection = DOM.createAsyncPlaceholder(initPointCloudList());
+    var pointCloudSelectionWrapper = document.createElement('span');
+    pointCloudSelectionWrapper.appendChild(pointCloudSelection);
+
     // Replace volume selection wrapper children with new select
     var refreshVolumeList = function() {
-      while (0 !== volumeSelectionWrapper.children.length) {
-        volumeSelectionWrapper.removeChild(volumeSelectionWrapper.children[0]);
+      volumeSelectionWrapper.refresh(WA.getLoadedVolumeIds());
+    };
+
+    // Replace point cloud selection wrapper children with new select
+    var refreshPointcloudList = function() {
+      while (0 !== pointCloudSelectionWrapper.children.length) {
+        pointCloudSelectionWrapper.removeChild(pointCloudSelectionWrapper.children[0]);
       }
-      var volumeSelection = DOM.createAsyncPlaceholder(initVolumeList());
-      volumeSelectionWrapper.appendChild(volumeSelection);
+      var pointcloudSelection = DOM.createAsyncPlaceholder(initPointCloudList());
+      pointCloudSelectionWrapper.appendChild(pointcloudSelection);
     };
 
     DOM.appendToTab(tabs['View settings'],
@@ -738,6 +929,15 @@ var WindowMaker = new function()
           [volumeSelectionWrapper],
           ['Faces ', o.meshes_faces, function() { WA.options.meshes_faces = this.checked;}, false],
           [WA.createMeshColorButton()],
+          {
+            type: 'checkbox',
+            label: 'Pickable',
+            title: 'Whether or not to include volumes when picking a location using Shift + Click',
+            value: WA.options.volume_location_picking,
+            onclick: function() {
+              WA.options.volume_location_picking = this.checked;
+            }
+          },
           [landmarkGroupSelection],
           {
             type: 'numeric',
@@ -752,9 +952,54 @@ var WindowMaker = new function()
               }
             }
           },
+          [pointCloudSelectionWrapper],
+          {
+            type: 'numeric',
+            label: 'Point cloud scale',
+            value: o.pointcloud_scale,
+            length: 3,
+            onchange: function() {
+              let value  = parseInt(this.value, 10);
+              if (value && !Number.isNaN(value)) {
+                WA.options.pointcloud_scale = value;
+                WA.adjustContent();
+              }
+            }
+          },
+          {
+            type: 'numeric',
+            label: 'Point cloud sample',
+            value: o.pointcloud_sample * 100,
+            length: 3,
+            step: 1,
+            min: 0,
+            max: 100,
+            onchange: function() {
+              let value  = parseInt(this.value, 10);
+              if (value && !Number.isNaN(value)) {
+                WA.options.pointcloud_sample = value / 100.0;
+                WA.adjustContent();
+              }
+            }
+          },
           ['Active node', o.show_active_node, function() { WA.options.show_active_node = this.checked; WA.adjustContent(); }, false],
           ['Active node on top', o.active_node_on_top, function() { WA.options.active_node_on_top = this.checked; WA.adjustContent(); }, false],
-          ['Black background', o.show_background, adjustFn('show_background'), false],
+          ['Radius adaptive active node', o.active_node_respects_radius, function() { WA.options.active_node_respects_radius = this.checked; WA.adjustContent(); }, false],
+          {
+            type: 'color-button',
+            label: 'background',
+            title: 'Adjust the background color',
+            value: o.background_color,
+            color: {
+              initialColor: o.background_color,
+              initialAlpha: 1.0,
+              onColorChange: function(rgb, alpha, colorChanged, alphaChanged, colorHex) {
+                WA.options.background_color = '#' + colorHex;
+                WA.adjustStaticContent();
+              },
+            },
+            length: 10
+          },
           ['Floor', o.show_floor, adjustFn('show_floor'), false],
           {
             type: 'color-button',
@@ -771,8 +1016,19 @@ var WindowMaker = new function()
             },
             length: 10
           },
+          ['Axes', o.show_axes, function() { WA.setAxesVisibility(this.checked); }, false],
           ['Debug', o.debug, function() { WA.setDebug(this.checked); }, false],
           ['Line width', o.skeleton_line_width, null, function() { WA.updateSkeletonLineWidth(this.value); }, 4],
+          {
+            type: 'checkbox',
+            label: 'Volumetric lines',
+            value: o.triangulated_lines,
+            onclick: function() {
+              WA.options.triangulated_lines = this.checked;
+              WA.reloadSkeletons(WA.getSelectedSkeletons());
+            },
+            title: 'If checked, lines will be rendered as triangle mesh, which allows more robust line width adjustment.'
+          },
           {
             type: 'checkbox',
             label: 'Flat neuron material',
@@ -783,7 +1039,7 @@ var WindowMaker = new function()
             title: 'If checked, neurons will ignore light sources and appear "flat"'
           },
           {
-            type: 'numeric',
+            type: 'text',
             label: 'Custom Tags:',
             placeholder: 'Name or regex',
             title: 'Display handle spheres for nodes with tags matching this regex (must refresh 3D viewer after changing).',
@@ -838,11 +1094,25 @@ var WindowMaker = new function()
 
     var nodeScalingInput = DOM.appendNumericField(tabs['View settings'],
         'Node handle scaling', 'Size of handle spheres for tagged nodes.',
-              o.skeleton_node_scaling, null, function() {
-              WA.options.skeleton_node_scaling = Math.max(0, this.value) || 1.0;
+        o.skeleton_node_scaling, null, function() {
+              WA.options.skeleton_node_scaling = Math.max(0, parseInt(this.value, 10)) || 1.0;
               WA.adjustContent();
               WA.updateSkeletonNodeHandleScaling(this.value);
-        }, 5);
+        }, 3, undefined, false, 10, 0);
+
+    var linkNodeScalingInput = DOM.appendNumericField(tabs['View settings'],
+        'Link site scaling', 'Size of handle spheres for nodes linked to connectors.',
+        o.link_node_scaling, null, function() {
+              WA.options.link_node_scaling = Math.max(0, parseInt(this.value, 10)) || 1.0;
+              WA.adjustContent();
+              WA.updateLinkNodeHandleScaling(this.value);
+        }, 3, undefined, false, 10, 0);
+
+    var textScalingInput = DOM.appendNumericField(tabs['View settings'],
+        'Text scaling', 'Scaling of text.', o.text_scaling, null, function() {
+              let value = parseInt(this.value, 10);
+              WA.updateTextScaling(value);
+        }, 3, undefined, false, 0.1, 0);
 
     DOM.appendToTab(tabs['Stacks'],
         [
@@ -851,7 +1121,7 @@ var WindowMaker = new function()
           {type: 'checkbox', label: 'with stack images', value: o.zplane_texture,
            onclick: adjustFn('zplane_texture'), title: 'If checked, images ' +
              'of the current section of the active stack will be displayed on a Z plane.'},
-          {type: 'numeric', label: 'Z plane zoom level ', value: o.zplane_zoomlevel,
+          {type: 'text', label: 'Z plane zoom level ', value: o.zplane_zoomlevel,
            title: 'The zoom-level to use (slider value in top toolbar) for image tiles ' +
            'in a Z plane. If set to "max", the highest zoom-level available will be ' +
            'which in turn means the worst resolution available.', length: 2,
@@ -860,14 +1130,69 @@ var WindowMaker = new function()
                  Math.max(0, this.value);
              WA.adjustStaticContent();
             }},
-          {type: 'numeric', label: 'Z plane opacity', value: o.zplane_opacity, length: 2,
-            title: 'The opacity of displayed Z planes', onchange: function(e) {
+          {type: 'numeric', label: 'Z plane opacity', value: o.zplane_opacity, length: 4,
+            min: 0, max: 1, step: 0.1, title: 'The opacity of displayed Z planes', onchange: function(e) {
               var value = parseFloat(this.value);
               if (value) {
                 WA.options.zplane_opacity = value;
                 WA.adjustStaticContent();
               }
             }},
+          {
+            type: 'checkbox',
+            label: 'Replace background color',
+            value: o.zplane_replace_background,
+            onclick: function() {
+              WA.options.zplane_replace_background = this.checked;
+              WA.adjustStaticContent();
+              $(`#3d-viewier-zplane-min-bg-val-${WA.widgetID}`).prop('disabled', this.checked ? '' : 'disabled');
+              $(`#3d-viewier-zplane-max-bg-val-${WA.widgetID}`).prop('disabled', this.checked ? '' : 'disabled');
+              $(`#3d-viewier-zplane-new-bg-color-${WA.widgetID}`).prop('disabled', this.checked ? '' : 'disabled');
+            },
+            title: 'If enabled, the background color of displayed data will be replaced by a selectable color.'
+          },
+          {
+            id: `3d-viewier-zplane-min-bg-val-${WA.widgetID}`,
+            type: 'numeric', label: 'Min BG val', value: o.zplane_min_bg_val, length: 4,
+            disabled: !o.zplane_replace_background,
+            min: 0, max: 1, step: 0.1, title: 'Minimum value of background filter', onchange: function(e) {
+              var value = parseFloat(this.value);
+              if (value) {
+                WA.options.zplane_min_bg_val = value;
+                WA.adjustStaticContent();
+              }
+            }},
+          {
+            id: `3d-viewier-zplane-max-bg-val-${WA.widgetID}`,
+            type: 'numeric', label: 'Max BG val', value: o.zplane_max_bg_val, length: 4,
+            disabled: !o.zplane_replace_background,
+            min: 0, max: 1, step: 0.1, title: 'Maximum value of background filter', onchange: function(e) {
+              var value = parseFloat(this.value);
+              if (value) {
+                WA.options.zplane_max_bg_val = value;
+                WA.adjustStaticContent();
+              }
+            }},
+          {
+            id: `3d-viewier-zplane-new-bg-color-${WA.widgetID}`,
+            type: 'color-button',
+            label: 'New background',
+            title: 'The new background color replacing the old one',
+            value: o.zplane_replacement_bg_color,
+            disabled: !o.zplane_replace_background,
+            color: {
+              initialColor: o.zplane_replacement_bg_color,
+              initialAlpha: 1.0,
+              onColorChange: function(rgb, alpha, colorChanged, alphaChanged, colorHex) {
+                WA.options.zplane_replacement_bg_color = '#' + colorHex;
+                WA.adjustStaticContent();
+              },
+            },
+            length: 10
+          },
+          {type: 'checkbox', label: 'Data size check', value: o.zplane_size_check,
+           onclick: adjustFn('zplane_size_check'), title: 'Whether to require user ' +
+              'confirmation to load more than 100 MB of image data for the Z plane.'},
           ['Missing sections', o.show_missing_sections, adjustFn('show_missing_sections'), false],
           ['with height:', o.missing_section_height, ' %', function() {
               WA.options.missing_section_height = Math.max(0, Math.min(this.value, 100));
@@ -1036,6 +1361,16 @@ var WindowMaker = new function()
             },
             title: 'If checked, nodes are filtered according to the filter rules (filter icon in top bar)'
           },
+          {
+            type: 'checkbox',
+            label: 'Collapse "not a branch"',
+            value: o.collapse_artifactual_branches,
+            onclick: function() {
+              WA.options.collapse_artifactual_branches = this.checked;
+              WA.updateSkeletons();
+            },
+            title: 'If enabled, collapses artifactual branches that are marked with the tag "not a branch".'
+          },
         ]);
 
     DOM.appendToTab(tabs['Shading parameters'],
@@ -1046,7 +1381,97 @@ var WindowMaker = new function()
           ['Min. synapse-free cable', o.min_synapse_free_cable, ' nm', function() {
             WA.updateShadingParameter('min_synapse_free_cable', this.value, 'synapse-free'); }, 6],
           ['Strahler number', o.strahler_cut, '', function() { WA.updateShadingParameter('strahler_cut', this.value, ['dendritic-backbone', 'single-strahler-number', 'strahler-threshold']); }, 4],
-          ['Tag (regex):', o.tag_regex, '', function() { WA.updateShadingParameter('tag_regex', this.value, 'downstream-of-tag'); }, 4]
+          {
+            type: 'text',
+            label: 'Tag (regex):',
+            value: o.tag_regex,
+            onchange, function() {
+              WA.updateShadingParameter('tag_regex', this.value, 'downstream-of-tag');
+            },
+            length: 4
+          },
+          {
+            type: 'text',
+            label: 'Sampler domain IDs',
+            placeholder: '1, 2, …',
+            title: 'If a sampler domain shading or coloring method is used, only these domains will be shown.',
+            value: o.allowed_sampler_domain_ids.join(', '),
+            onchange: function() {
+              WA.options.allowed_sampler_domain_ids = this.value.split(',').filter(
+                  function(s) {
+                    s = s.trim();
+                    return s.length > 0;
+                  }).map(function(s) {
+                    var val = parseInt(s, 10);
+                    if (isNaN(val)) {
+                      throw new CATMAID.ValueError("No number: " + s.trim());
+                    }
+                    return val;
+                  });
+              WA.updateSkeletonColors()
+                .then(function() { WA.render(); });
+            },
+            length: 4,
+          },
+          {
+            type: 'text',
+            label: 'Sampler interval IDs',
+            placeholder: '1, 2, …',
+            title: 'If a sampler interval shading or coloring method is used, only these intervals will be shown.',
+            value: o.allowed_sampler_interval_ids.join(', '),
+            onchange: function() {
+              WA.options.allowed_sampler_interval_ids = this.value.split(',').filter(
+                  function(s) {
+                    s = s.trim();
+                    return s.length > 0;
+                  }).map(function(s) {
+                    var val = parseInt(s, 10);
+                    if (isNaN(val)) {
+                      throw new CATMAID.ValueError("No number: " + s.trim());
+                    }
+                    return val;
+                  });
+              WA.updateSkeletonColors()
+                .then(function() { WA.render(); });
+            },
+            length: 4,
+          },
+          {
+            type: 'color-button',
+            label: 'Custom pre-color',
+            title: 'The color used for presynaptic sites when custom connector coloring is selected.',
+            color: {
+              initialColor: WA.options.custom_connector_colors['presynaptic_to'],
+              onColorChange: function(rgb, alpha, colorChanged, alphaChanged, colorHex) {
+                WA.options.custom_connector_colors['presynaptic_to'] = '#' + colorHex;
+                if (WA.options.connector_color === 'custom') {
+                  WA.updateConnectorColors();
+                }
+              }
+            },
+          },
+          {
+            type: 'color-button',
+            label: 'Custom post-color',
+            title: 'The color used for postsynaptic sites when custom connector coloring is selected.',
+            color: {
+              initialColor: WA.options.custom_connector_colors['postsynaptic_to'],
+              onColorChange: function(rgb, alpha, colorChanged, alphaChanged, colorHex) {
+                WA.options.custom_connector_colors['postsynaptic_to'] = '#' + colorHex;
+                if (WA.options.connector_color === 'custom') {
+                  WA.updateConnectorColors();
+                }
+              }
+            },
+          },
+          {
+            type: 'button',
+            label: 'Polyadicity colors',
+            title: 'Define colors for different polyadicity levels for synapses.',
+            onclick: () => {
+              WA.editConnectorPolyadicityColors();
+            },
+          },
         ]);
 
     var axisOptions = document.createElement('select');
@@ -1078,9 +1503,19 @@ var WindowMaker = new function()
           }],
           ['Stop', WA.stopAnimation.bind(WA)],
           [axisOptionsLabel],
-          ['Rotation speed', o.animation_rotation_speed, '', function() {
-            WA.options.animation_rotation_speed = parseFloat(this.value);
-           }, 5],
+          {
+            type: 'numeric',
+            label: 'Rotation time (sec)',
+            value: o.animation_rotation_time,
+            length: 4,
+            min: 0,
+            onchange: function() {
+              let value = Number(this.value);
+              if (!Number.isNaN(value)) {
+                WA.options.animation_rotation_time = value;
+              }
+            },
+          },
           {
             type: 'select',
             label: 'Neuron visibility:',
@@ -1145,7 +1580,64 @@ var WindowMaker = new function()
           },
           ['Back and forth', o.animation_back_forth, function() {
             WA.options.animation_back_forth = this.checked;
-          }, false]
+          }, false],
+          {
+            type: 'checkbox',
+            label: 'Animate stack Z plane',
+            value: o.animation_animate_z_plane,
+            onclick: function() {
+              WA.options.animation_animate_z_plane = this.checked;
+              let changeFreqField = document.getElementById(
+                  '3dviewer-animation-zplane-change-frequency-' + WA.widgetID);
+              let changeStepField = document.getElementById(
+                  '3dviewer-animation-zplane-change-step-' + WA.widgetID);
+              if (changeFreqField) {
+                if (this.checked) {
+                  changeFreqField.removeAttribute('disabled');
+                } else {
+                  changeFreqField.setAttribute('disabled', 'disabled');
+                }
+              }
+              if (changeStepField) {
+                if (this.checked) {
+                  changeStepField.removeAttribute('disabled');
+                } else {
+                  changeStepField.setAttribute('disabled', 'disabled');
+                }
+              }
+            },
+            title: 'If checked, the Z plane will be animated using the change frequency and step parameters.',
+          },
+          {
+            type: 'numeric',
+            label: 'Z plane changes/sec',
+            id: '3dviewer-animation-zplane-change-frequency-' + WA.widgetID,
+            value: o.animation_zplane_changes_per_sec,
+            length: 3,
+            min: 0,
+            disabled: !o.animation_animate_z_plane,
+            onchange: function() {
+              let value = Number(this.value);
+              if (!Number.isNaN(value)) {
+                o.animation_zplane_changes_per_sec = value;
+              }
+            },
+          },
+          {
+            type: 'numeric',
+            label: 'Z plane change step',
+            id: '3dviewer-animation-zplane-change-step-' + WA.widgetID,
+            value: o.animation_zplane_change_step,
+            length: 3,
+            disabled: !o.animation_animate_z_plane,
+            onchange: function() {
+              let value = Math.floor(Number(this.value));
+              if (!Number.isNaN(value)) {
+                o.animation_zplane_change_step = value;
+              }
+              this.value = value;
+            },
+          },
         ]);
 
     var historyTimeDisplay = document.createElement('span');
@@ -1366,7 +1858,8 @@ var WindowMaker = new function()
 
     $(bar).tabs();
 
-    var container = createContainer("view_in_3d_webgl_widget" + WA.widgetID);
+    var container = createContainer("view_in_3d_webgl_widget" + WA.widgetID, true);
+    container.classList.add('expand');
     content.appendChild(container);
 
     var canvas = document.createElement('div');
@@ -1376,6 +1869,10 @@ var WindowMaker = new function()
 
     var scaleBar = document.createElement('div');
     canvas.appendChild(scaleBar);
+
+    var axes = document.createElement('div');
+    axes.classList.add('axes-3d-viewer');
+    canvas.appendChild(axes);
 
     // Add window to DOM, init WebGLView (requires element in DOM) and
     // create a staging list. The listeners are added last to prevent
@@ -1390,6 +1887,7 @@ var WindowMaker = new function()
     // updated here explicitly. At some point we might want to have some sort of
     // observer for this.
     nodeScalingInput.value = WA.options.skeleton_node_scaling;
+    linkNodeScalingInput.value = WA.options.link_node_scaling;
 
     // Arrange previously created selection table below 3D viewer. To do this,
     // the Selection Table has to be moved out of its split node and moved into
@@ -1415,11 +1913,19 @@ var WindowMaker = new function()
 
     CATMAID.Volumes.on(CATMAID.Volumes.EVENT_VOLUME_ADDED,
         refreshVolumeList, WA);
+    CATMAID.Pointcloud.on(CATMAID.Pointcloud.EVENT_POINTCLOUD_ADDED,
+        refreshPointcloudList, WA);
+    CATMAID.Pointcloud.on(CATMAID.Pointcloud.EVENT_POINTCLOUD_DELETED,
+        refreshPointcloudList, WA);
 
     // Clear listeners that were added above
     var unregisterUIListeners = function() {
       CATMAID.Volumes.off(CATMAID.Volumes.EVENT_VOLUME_ADDED,
           refreshVolumeList, WA);
+      CATMAID.Pointcloud.off(CATMAID.Pointcloud.EVENT_POINTCLOUD_ADDED,
+          refreshPointcloudList, WA);
+      CATMAID.Pointcloud.off(CATMAID.Pointcloud.EVENT_POINTCLOUD_DELETED,
+          refreshPointcloudList, WA);
     };
 
     var destroy = wrapSaveState(WA, WA.destroy);
@@ -1460,214 +1966,22 @@ var WindowMaker = new function()
     // Resize WebGLView after staging list has been added
     win.callListeners( CMWWindow.RESIZE );
 
-    // Make selection table smaller so that it only occupies about 25% of the
-    // available vertical space (instead of 50%).
-    win.getParent().changeHeight(Math.abs(win.getHeight() * 0.5));
+    if (selectionTable) {
+      // Make selection table smaller so that it only occupies about 25% of the
+      // available vertical space (instead of 50%).
+      win.getParent().changeHeight(Math.abs(win.getHeight() * 0.5));
 
-    // Now that a Selection Table exists, have the 3D viewer subscribe to it and
-    // make it ignore local models. Don't make it selection based, to not reload
-    // skeletons on visibility changes.
-    var Subscription = CATMAID.SkeletonSourceSubscription;
-    WA.addSubscription(new Subscription(selectionTable.widget, true, false,
-          CATMAID.SkeletonSource.UNION, Subscription.ALL_EVENTS), true);
-    // Override existing local models if subscriptions are updated
-    WA.ignoreLocal = true;
+      // Now that a Selection Table exists, have the 3D viewer subscribe to it and
+      // make it ignore local models. Don't make it selection based, to not reload
+      // skeletons on visibility changes.
+      var Subscription = CATMAID.SkeletonSourceSubscription;
+      WA.addSubscription(new Subscription(selectionTable.widget, true, false,
+            CATMAID.SkeletonSource.UNION, Subscription.ALL_EVENTS), true);
+      // Override existing local models if subscriptions are updated
+      WA.ignoreLocal = true;
+    }
 
     return {window: win, widget: WA};
-  };
-
-  var createGraphWindow = function()
-  {
-    var GG = new CATMAID.GroupGraph();
-
-    var win = new CMWWindow(GG.getName());
-    var content = win.getFrame();
-    content.style.backgroundColor = "#ffffff";
-
-    var bar = document.createElement('div');
-    bar.setAttribute("id", 'compartment_graph_window_buttons' + GG.widgetID);
-    bar.setAttribute('class', 'buttonpanel');
-    DOM.addSourceControlsToggle(win, GG);
-    DOM.addButtonDisplayToggle(win);
-    DOM.addHelpButton(win, 'Help: ' + GG.getName(), "<h3>Visualize connecticity networks</h3>" +
-        "<h4>How to...</h4><p><em>Hide edges/links:</em> Select an edge and use the <em>Hide</em> button in the <em>Selection</em> tab.</p>");
-    addWindowConfigButton(win, GG);
-
-    var tabs = DOM.addTabGroup(bar, GG.widgetID, ['Main', 'Grow', 'Graph',
-        'Selection', 'Subgraphs', 'Align', 'Export']);
-
-    DOM.appendToTab(tabs['Main'],
-        [[document.createTextNode('From')],
-         [CATMAID.skeletonListSources.createSelect(GG)],
-         ['Append', GG.loadSource.bind(GG)],
-         ['Append as group', GG.appendAsGroup.bind(GG)],
-         ['Remove', GG.removeSource.bind(GG)],
-         ['Clear', GG.clear.bind(GG)],
-         ['Refresh', GG.update.bind(GG)],
-         [document.createTextNode(' - ')],
-         ['Group equally named', GG.groupEquallyNamed.bind(GG)],
-         [document.createTextNode(' - ')],
-         ['Properties', GG.graph_properties.bind(GG)],
-         ['Clone', GG.cloneWidget.bind(GG)],
-         ['Save', GG.saveJSON.bind(GG)],
-         ['Open...', function() { document.querySelector('#gg-file-dialog-' + GG.widgetID).click(); }]]);
-
-    tabs['Export'].appendChild(DOM.createFileButton(
-          'gg-file-dialog-' + GG.widgetID, false, function(evt) {
-            GG.loadFromJSON(evt.target.files);
-          }));
-
-    var color = document.createElement('select');
-    color.setAttribute('id', 'graph_color_choice' + GG.widgetID);
-    color.options.add(new Option('source', 'source'));
-    color.options.add(new Option('review status (union)', 'union-review'));
-    color.options.add(new Option('review status (team)', 'whitelist-review'));
-    color.options.add(new Option('review status (own)', 'own-review'));
-    color.options.add(new Option('input/output', 'I/O'));
-    color.options.add(new Option('betweenness centrality', 'betweenness_centrality'));
-    color.options.add(new Option('circles of hell (upstream)', 'circles_of_hell_upstream')); // inspired by Tom Jessell's comment
-    color.options.add(new Option('circles of hell (downstream)', 'circles_of_hell_downstream'));
-    color.onchange = GG._colorize.bind(GG, color);
-
-    var layout = DOM.appendSelect(tabs['Graph'], null, null, GG.layoutStrings);
-
-    var edges = document.createElement('select');
-    edges.setAttribute('id', 'graph_edge_threshold' + GG.widgetID);
-    for (var i=1; i<101; ++i) edges.appendChild(new Option(i, i));
-
-    var edgeConfidence = document.createElement('select');
-    edgeConfidence.setAttribute('id', 'graph_edge_confidence_threshold' + GG.widgetID);
-    for (var i=1; i<6; ++i) edgeConfidence.appendChild(new Option(i, i));
-    edges.onchange = edgeConfidence.onchange = function() {
-        GG.filterEdges($('#graph_edge_threshold' + GG.widgetID).val(),
-                       $('#graph_edge_confidence_threshold' + GG.widgetID).val()); };
-
-    var linkTypeSelection = DOM.createAsyncPlaceholder(CATMAID.GroupGraph.initLinkTypeList(GG));
-    var linkTypeSelectionWrapper = document.createElement('span');
-    linkTypeSelectionWrapper.appendChild(linkTypeSelection);
-
-    DOM.appendToTab(tabs['Graph'],
-        [['Re-layout', GG.updateLayout.bind(GG, layout, null)],
-         [' fit', true, GG.toggleLayoutFit.bind(GG), true],
-         [document.createTextNode(' - Color: ')],
-         [color],
-         [document.createTextNode(' - Hide edges with less than ')],
-         [edges],
-         [document.createTextNode(' synapses ')],
-         [document.createTextNode(' - Filter synapses below confidence ')],
-         [edgeConfidence],
-         {type: 'child', element: linkTypeSelectionWrapper}
-        ]);
-
-    DOM.appendToTab(tabs['Selection'],
-        [['Annotate', GG.annotate_skeleton_list.bind(GG)],
-         [document.createTextNode(' - ')],
-         ['Measure edge risk', GG.annotateEdgeRisk.bind(GG)],
-         [document.createTextNode(' - ')],
-         ['Group', GG.group.bind(GG)],
-         ['Ungroup', GG.ungroup.bind(GG)],
-         [document.createTextNode(' - ')],
-         ['Hide', GG.hideSelected.bind(GG)],
-         ['Show hidden', GG.showHidden.bind(GG), {id: 'graph_show_hidden' + GG.widgetID, disabled: true}],
-         ['lock', GG.applyToNodes.bind(GG, 'lock', true)],
-         ['unlock', GG.applyToNodes.bind(GG, 'unlock', true)],
-         [document.createTextNode(' - ')],
-         ['Remove', GG.removeSelected.bind(GG)],
-         [document.createTextNode(' - ')],
-         [DOM.createNumericField('gg_select_regex' + GG.widgetID, null, null, '', '', GG.selectByLabel.bind(GG), null)], // NOTE: actually used as text rather than being limited to numbers, despite the name
-         ['Select by regex', GG.selectByLabel.bind(GG)],
-         [document.createTextNode(' - ')],
-         ['Invert', GG.invertSelection.bind(GG)],
-        ]);
-
-    DOM.appendToTab(tabs['Align'],
-        [[document.createTextNode('Align: ')],
-         [' X ', GG.equalizeCoordinate.bind(GG, 'x')],
-         [' Y ', GG.equalizeCoordinate.bind(GG, 'y')],
-         [document.createTextNode(' - Distribute: ')],
-         [' X ', GG.distributeCoordinate.bind(GG, 'x')],
-         [' Y ', GG.distributeCoordinate.bind(GG, 'y')]]);
-
-    var f = function(name) {
-      var e = document.createElement('select');
-      e.setAttribute("id", "gg_n_min_" + name + GG.widgetID);
-      e.appendChild(new Option("All " + name, 0));
-      e.appendChild(new Option("No " + name, -1));
-      for (var i=1; i<51; ++i) {
-        e.appendChild(new Option(i, i));
-      }
-      e.selectedIndex = 3; // value of 2 pre or post min
-      return e;
-    };
-
-    DOM.appendToTab(tabs['Grow'],
-        [[document.createTextNode('Grow ')],
-         ['Circles', GG.growGraph.bind(GG)],
-         [document.createTextNode(" by ")],
-         [DOM.createSelect("gg_n_circles_of_hell" + GG.widgetID, [1, 2, 3, 4, 5])],
-         [document.createTextNode(" orders, limit:")],
-         [f("upstream")],
-         [f("downstream")],
-         [DOM.createNumericField('gg_filter_regex' + GG.widgetID, 'filter (regex):',
-                             'Only include neighbors with annotations matching this regex.',
-                             '', '', undefined, 4)],
-         [document.createTextNode(" - Find ")],
-         ['paths', GG.growPaths.bind(GG)],
-         [document.createTextNode(" by ")],
-         [DOM.createSelect("gg_n_hops" + GG.widgetID, [2, 3, 4, 5, 6])],
-         [document.createTextNode(" hops, limit:")],
-         [f("path_synapses")],
-         ['pick sources', GG.pickPathOrigins.bind(GG, 'source'), {id: 'gg_path_source' + GG.widgetID}],
-         ['X', GG.clearPathOrigins.bind(GG, 'source')],
-         ['pick targets', GG.pickPathOrigins.bind(GG, 'target'), {id: 'gg_path_target' + GG.widgetID}],
-         ['X', GG.clearPathOrigins.bind(GG, 'target')]]);
-
-    DOM.appendToTab(tabs['Export'],
-        [['Export GML', GG.exportGML.bind(GG)],
-         ['Export SVG', GG.showSVGOptions.bind(GG)],
-         ['Export Adjacency Matrix', GG.exportAdjacencyMatrix.bind(GG)],
-         ['Open Connectivity Matrix', GG.openConnectivityMatrix.bind(GG, false)],
-         ['Open plot', GG.openPlot.bind(GG)],
-         ['Quantify', GG.quantificationDialog.bind(GG)]]);
-
-    DOM.appendToTab(tabs['Subgraphs'],
-        [[document.createTextNode('Select node(s) and split by: ')],
-         ['Axon & dendrite', GG.splitAxonAndDendrite.bind(GG)],
-         ['Axon, backbone dendrite & dendritic terminals', GG.splitAxonAndTwoPartDendrite.bind(GG)],
-         ['Synapse clusters', GG.splitBySynapseClustering.bind(GG)],
-         ['Tag', GG.splitByTag.bind(GG)],
-         ['Reset', GG.unsplit.bind(GG)]]);
-
-    content.appendChild( bar );
-
-    $(bar).tabs();
-
-    /* Create graph container and assure that it's overflow setting is set to
-     * 'hidden'. This is required, because cytoscape.js' redraw can be delayed
-     * (e.g. due to animation). When the window's size is reduced, it can happen
-     * that the cytoscape canvas is bigger than the container. The default
-     * 'auto' setting then introduces scrollbars, triggering another resize.
-     * This somehow confuses cytoscape.js and causes the graph to disappear.
-     */
-    var container = createContainer("graph_widget" + GG.widgetID);
-    container.style.overflow = 'hidden';
-    content.appendChild(container);
-
-    var graph = document.createElement('div');
-    graph.setAttribute("id", "cyelement" + GG.widgetID);
-    graph.style.width = "100%";
-    graph.style.height = "100%";
-    graph.style.backgroundColor = "#FFFFF0";
-    container.appendChild(graph);
-
-    addListener(win, container, 'compartment_graph_window_buttons' + GG.widgetID,
-        GG.destroy.bind(GG), GG.resize.bind(GG));
-
-    addLogic(win);
-
-    GG.init();
-
-    return {window: win, widget: GG};
   };
 
   var createConnectivityGraphPlot = function(instance) {
@@ -1679,7 +1993,7 @@ var WindowMaker = new function()
 
     var buttons = document.createElement('div');
     buttons.setAttribute('id', 'connectivity_graph_plot_buttons' + GP.widgetID);
-    buttons.setAttribute('class', 'buttonpanel');
+    buttons.classList.add('windowpanel', 'buttonpanel');
     DOM.addButtonDisplayToggle(win);
     addWindowConfigButton(win, GP);
 
@@ -1691,7 +2005,7 @@ var WindowMaker = new function()
 
     content.appendChild(buttons);
 
-    var container = createContainer('connectivity_graph_plot_div' + GP.widgetID);
+    var container = createContainer('connectivity_graph_plot_div' + GP.widgetID, true);
     content.appendChild(container);
 
     var plot = document.createElement('div');
@@ -1701,8 +2015,7 @@ var WindowMaker = new function()
     plot.style.backgroundColor = "#FFFFFF";
     container.appendChild(plot);
 
-    addListener(win, container, 'connectivity_graph_plot_buttons' + GP.widgetID,
-            GP.destroy.bind(GP), GP.resize.bind(GP));
+    addListener(win, container, GP.destroy.bind(GP), GP.resize.bind(GP));
 
     addLogic(win);
 
@@ -1725,7 +2038,7 @@ var WindowMaker = new function()
     content.appendChild(container);
 
     // Wire it up.
-    addListener(win, container, undefined, OS.destroy.bind(OS));
+    addListener(win, container, OS.destroy.bind(OS));
     addLogic(win);
 
     // Let the ontology search initialize the interface within the created
@@ -1882,14 +2195,14 @@ var WindowMaker = new function()
     content.style.backgroundColor = "#ffffff";
     addWindowConfigButton(win, NN);
 
-    var container = createContainer("neuron-navigator" + NN.widgetID);
+    var container = createContainer("neuron-navigator" + NN.widgetID, true);
     container.classList.add('navigator_widget');
 
     // Add container to DOM
     content.appendChild(container);
 
     // Wire it up.
-    addListener(win, container, undefined, NN.destroy.bind(NN));
+    addListener(win, container, NN.destroy.bind(NN));
     addLogic(win);
 
     // Let the navigator initialize the interface within
@@ -1902,9 +2215,10 @@ var WindowMaker = new function()
   var createHtmlWindow = function (params) {
     var win = new CMWWindow(params.title);
     var content = win.getFrame();
-    var container = createContainer();
+    var container = createContainer(undefined, true);
     content.appendChild(container);
     content.style.backgroundColor = "#ffffff";
+    content.classList.add('html-window');
 
     addListener(win, container);
     addLogic(win);
@@ -1920,19 +2234,14 @@ var WindowMaker = new function()
       description: 'A tool specific list of keyboard shortcuts',
       init: createKeyboardShortcutsWindow
     },
-    "3d-webgl-view": {
+    "3d-viewer": {
       name: '3D Viewer',
       description: 'Visualize neurons, synapses and image data in 3D',
       init: create3dWebGLWindow
     },
-    "graph-widget": {
-      name: 'Graph Widget',
-      description: 'Display and explore connectivity graphs',
-      init: createGraphWindow
-    },
     "connectivity-graph-plot": {
-      name: 'Graph Plot',
-      description: 'Plot',
+      name: 'Connectivity Graph Plot',
+      description: 'Plot # of upstream/downstream partners over synapse count',
       init: createConnectivityGraphPlot
     },
     "ontology-search": {
@@ -1944,11 +2253,6 @@ var WindowMaker = new function()
       name: 'Neuron Navigator',
       description: 'Traverse and constrain neuron, user and annotation networks',
       init: createNeuronNavigatorWindow
-    },
-    "connectivity-matrix": {
-      name: 'Connectivity Matrix',
-      description: 'Aggregate partner connections and display them in a matrix',
-      init: createConnectivityMatrixWindow
     },
     "html": {
       name: 'HTML Widget',
@@ -1987,9 +2291,10 @@ var WindowMaker = new function()
    * @param  {string}  name   Name of the widget window to search for.
    * @param  {boolean} create Whether to create a new widget if none is open.
    * @param  {Object}  params Parameters with which to create the window.
+   * @param  {Boolean} silent (optional) Wheter to drop all error messages.
    * @return {Map}            Map of window objects to widget instances.
    */
-  this.getOpenWindows = function (name, create, params) {
+  this.getOpenWindows = function (name, create, params, silent) {
     if (creators.hasOwnProperty(name)) {
       if (windows.has(name)) {
         var instances = windows.get(name);
@@ -2002,17 +2307,17 @@ var WindowMaker = new function()
       } else {
         return new Map();
       }
-    } else {
+    } else if (!silent) {
       CATMAID.error("No known window with name " + name);
     }
   };
 
   /** Always create a new instance of the widget. The caller is allowed to hand
    * in extra parameters that will be passed on to the actual creator method. */
-  this.create = function(name, init_params) {
+  this.create = function(name, options, isInstance) {
     if (creators.hasOwnProperty(name)) {
       try {
-        var handles = creators[name].init(init_params);
+        var handles = creators[name].init(options, isInstance);
         if (windows.has(name)) {
           windows.get(name).set(handles.window, handles.widget);
         } else {
@@ -2086,6 +2391,16 @@ var WindowMaker = new function()
       name: options.name || key,
       description: options.description || ''
     };
+
+    if (options.websocketHandlers) {
+      for (var msgName in options.websocketHandlers) {
+        if (CATMAID.Client.messageHandlers.has(msgName) && !replace) {
+          throw new CATMAID.ValueError("A handler for message '" + msgName +
+              "' is already registered");
+        }
+        CATMAID.Client.messageHandlers.set(msgName, options.websocketHandlers[msgName]);
+      }
+    }
   };
 
   this.registerState = function(type, options) {
@@ -2119,6 +2434,46 @@ var WindowMaker = new function()
      return $.extend(true, {}, creators[widgetKey]);
   };
 
+  /**
+   * Return a widget and its key for the passed in window if no widget is known
+   * for the window.
+   */
+  this.getWidgetKeyForWindow = function(win) {
+    for (let key of windows.keys()) {
+      let widgetInfo = windows.get(key);
+      if (widgetInfo && widgetInfo.has(win)) {
+        return {
+          widget: widgetInfo.get(win),
+          key: key
+        };
+      }
+    }
+    return null;
+  };
+
+  function windowIsStackViewer(stackViewers, win) {
+    for (var i=0; i<stackViewers.length; ++i) {
+      var stackViewer = stackViewers[i];
+      if (stackViewer._stackWindow === win) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Close all widget, leave only passed in stack viewers open.
+   */
+  this.closeAllButStackViewers = function(stackViewers) {
+    var allWindows = CATMAID.rootWindow.getWindows();
+    while (allWindows.length > 0) {
+      var win = allWindows.pop();
+      if (!windowIsStackViewer(stackViewers, win)) {
+        win.close();
+      }
+    }
+  };
+
 }();
 
 
@@ -2143,5 +2498,7 @@ var WindowMaker = new function()
   CATMAID.registerState = function(type, options) {
     WindowMaker.registerState(type, options);
   };
+
+  CATMAID.WindowMaker = WindowMaker;
 
 })(CATMAID);

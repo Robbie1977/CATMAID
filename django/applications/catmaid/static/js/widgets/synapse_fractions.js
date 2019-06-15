@@ -641,7 +641,7 @@
   SynapseFractions.prototype.updateMorphologies = function(skids) {
     fetchSkeletons(
         skids,
-        function(skid) { return django_url + project.id + '/' + skid + '/0/1/0/compact-arbor'; },
+        function(skid) { return CATMAID.makeURL(project.id + '/' + skid + '/0/1/0/compact-arbor'); },
         function(skid) { return {}; }, // POST
         (function(skid, json) {
           // register
@@ -1735,7 +1735,8 @@
     var sortFn = function(a, b) {
         if (a.value === b.value) {
           // Alphabetic when equal value
-          return a.name < b.name ? -1 : 1;
+          //return a.name < b.name ? -1 : 1;
+          return a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: 'base'});
         }
         // Descending
         return a.value > b.value ? -1 : 1;
@@ -1989,7 +1990,7 @@
 
   CATMAID.registerWidget({
     name: "Synapse Fractions",
-    descending: "Plot input/ouput fraction wrt. partner neurons",
+    description: "Plot input/ouput fraction wrt. partner neurons",
     key: "synapse-fractions",
     creator: CATMAID.SynapseFractions
   });

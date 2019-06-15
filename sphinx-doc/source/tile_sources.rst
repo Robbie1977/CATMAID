@@ -13,6 +13,12 @@ CATMAID, the parameters which they use to retrieve image data, how this is
 stored in the CATMAID backend, and how to create a new tile source type in the
 CATMAID backend and frontend.
 
+Also note that CATMAID will clamp the display of tiled data by default to zero
+(i.e. no request is made for tiles at coordinate [-1, 0] in the plane). This
+behavior can be changed by adding the boolean field ``clamp`` to the stack's
+``metadata`` field with a value of ``false``. The ``metadata`` field expects a
+JSON format, so the content would look like ``{"clamp": false}``.
+
 Tile Source Parameters
 ----------------------
 
@@ -202,8 +208,8 @@ Tile source types are listed by the enumeration integer ID referenced by
 *****************
 
    This tile source type retrieves image tiles from the dynamic
-   `render service <https://github.com/saalfeldlab/render/tree/ws_phase_1>`_
-   used by the FlyTEM project at Janelia Research Campus.
+   `render service <https://github.com/saalfeldlab/render>`_
+   used at Janelia Research Campus.
 
    URL format::
 
@@ -299,6 +305,57 @@ Tile source types are listed by the enumeration integer ID referenced by
    While ``%AXIS_0%`` and ``%AXIS_1%`` could be inferred by parsing the URL
    for the slicing dimensions, note that ``%AXIS_2%`` could not.
 
+11. N5 image blocks
+**************
+
+   This type supports loading **image blocks** from
+   `N5 <https://github.com/saalfeldlab/n5>`_ served over HTTP.
+
+   Unlike other sources, ``sourceBaseUrl`` is not a valid URL on its
+   own. It contains several substitution strings the CATMAID replaces on each
+   tile request. This is necessary to support n-dimensional volumes. The
+   substitution strings are:
+
+   ``%SCALE_DATASET%`` (optional)
+      Where to insert the dataset name for different scale levels. Currently
+      these are ``s0``, ``s1``, etc., but in the future may be read from the
+      N5 attributes of the parent dataset of where this substitution string
+      appears.
+
+   Further, ``sourceBaseUrl`` has special path components. It should end in a
+   path component specifying the ordered dimensions from which image data
+   should be sliced, separated by underscores. For example, ``2_1_0`` will
+   slices N5 dimensions 2, 1, and 0 as the x, y, and z stack dimensions,
+   respectively.
+
+   This tile source will also look for a path component ending in ``.n5`` to
+   use as the N5 root directory. If it does not find such a component, it will
+   assume the origin is the root N5 directory.
+
+   For example::
+
+    https://catmaid.org/path/root.n5/group/dataset/%SCALE_DATASET%/raw/0_1_2
+
+12. JHU/APL Boss tiles
+**********************
+
+   This type supports loading tiles from a
+   `JHU/APL Boss <https://github.com/jhuapl-boss/boss>`_ instance, using a
+   manually entered API token for authorization. The API token entered through
+   the front-end layer control UI is passed in an ``Authorization`` header
+   with all tile requests.
+
+   Currently only XY tiles are fully supported. ``tileWidth`` and ``tileHeight``
+   must be equal.
+
+   ``sourceBaseURL`` should reference the REST resource directly::
+
+       <instance URL>/v1/tile/<collection>/<experiment>/<channel>/
+
+   XY URL format::
+
+       <sourceBaseURL>xy/<tileWidth>/<zoomLevel>/<col>/<row>/<pixelPosition.z>
+
 Backend Representation
 ----------------------
 
@@ -323,4 +380,4 @@ a function that returns an object with the appropriate ``getTileURL``,
 ``getOverviewURL``, and ``getOverviewLayer`` methods. The overview URL should
 locate a thumbnail of the current stack z-section. Then map the
 ``tileSourceType`` enumeration of your tile source type to your implementation
-in ``CATMAID.getTileSource``.
+in ``CATMAID.TileSources``.

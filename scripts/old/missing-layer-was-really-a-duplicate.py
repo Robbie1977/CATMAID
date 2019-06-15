@@ -21,7 +21,6 @@
 #    UPDATE stack SET resolution.z = ((stack.resolution).z * 0.9) WHERE id IN (4, 9);
 #    UPDATE location SET location.z = ((location.location).z * 0.9) WHERE project_id = 4;
 
-from __future__ import unicode_literals
 
 import glob, os, re, sys, subprocess
 
@@ -31,7 +30,7 @@ layer_to_remove = int(round(layer_to_remove_z/50.0))
 
 directories = filter(lambda x: re.match('\d+$', x), os.listdir('.'))
 directories = [int(x, 10) for x in directories]
-print directories
+print(directories)
 directories = [x for x in directories if x > layer_to_remove]
 directories.sort()
 
@@ -40,5 +39,5 @@ directory_mapping = zip(directories, (x - 1 for x in directories))
 subprocess.check_call(["rmdir", str(layer_to_remove)])
 
 for t in directory_mapping:
-    print "Will rename", t[0], "to", t[1]
+    print("Will rename", t[0], "to", t[1])
     subprocess.check_call(["mv", str(t[0]), str(t[1])])

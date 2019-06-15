@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
-import json
-import six
-import yaml
 
 from ast import literal_eval
+import json
+from typing import List
+import yaml
 
 from guardian.shortcuts import assign_perm
 from guardian.utils import get_anonymous_user
@@ -107,12 +105,12 @@ class ProjectsApiTests(CatmaidApiTestCase):
 
         response = self.client.get('/projects/export')
         self.assertEqual(response.status_code, 200)
-        result = yaml.load(response.content.decode('utf-8'))
+        result = yaml.load(response.content.decode('utf-8'), Loader=yaml.FullLoader)
 
         # Expect a returned list with four projects
         self.assertEqual(len(result), 4)
 
-        seen_projects = []
+        seen_projects = [] # type: List
         for exported_project in result:
             data = exported_project['project']
             pid = data['id']
@@ -129,8 +127,8 @@ class ProjectsApiTests(CatmaidApiTestCase):
             stackgroup_links = StackStackGroup.objects.filter(stack__in=stacks)
             valid_stackgroup_ids = [sgl.stack_group_id for sgl in stackgroup_links]
 
-            seen_stacks = []
-            seen_stackgroups = []
+            seen_stacks = [] # type: List
+            seen_stackgroups = [] # type: List
             for s in data.get('stacks', []):
                 stack_id = s['id']
                 self.assertIn(stack_id, valid_stack_ids)
@@ -144,7 +142,7 @@ class ProjectsApiTests(CatmaidApiTestCase):
                         literal_eval(s['dimension']))
                 self.assertEqual(literal_eval(str(stack.resolution)),
                         literal_eval(s['resolution']))
-                self.assertEqual(stack.num_zoom_levels, s['zoomlevels'])
+                self.assertEqual(stack.downsample_factors, s['downsample_factors'])
                 self.assertEqual(stack.metadata, s['metadata'])
                 self.assertEqual(stack.comment, s['comment'])
                 self.assertEqual(stack.attribution, s['attribution'])
@@ -180,9 +178,9 @@ class ProjectsApiTests(CatmaidApiTestCase):
                     self.assertEqual(sg_link.group_relation.name, sge['relation'])
 
                 # Make sure we have seen all relevant stack groups
-                six.assertCountEqual(self, valid_stackgroup_ids, seen_stackgroups)
+                self.assertCountEqual(valid_stackgroup_ids, seen_stackgroups)
 
             # Make sure we have seen all relevant stacks
-            six.assertCountEqual(self, valid_stack_ids, seen_stacks)
+            self.assertCountEqual(valid_stack_ids, seen_stacks)
 
-        six.assertCountEqual(self, valid_project_ids, seen_projects)
+        self.assertCountEqual(valid_project_ids, seen_projects)

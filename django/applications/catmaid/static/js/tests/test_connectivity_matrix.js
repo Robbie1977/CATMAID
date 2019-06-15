@@ -40,12 +40,12 @@ QUnit.test('Connectivity matrix test', function( assert ) {
     var expectedMatrix = [[3, 0, 8],
                           [0, 3, 7],
                           [12, 5, 0]];
-    assert.deepEqual(m, expectedMatrix,
+    assert.deepEqual(cm.getFlatMatrix(), expectedMatrix,
         "CATMAID.ConnectivityMatrix creates an expected matrix");
 
     // Test if creating a new matrix instance preserves the result above
     var cm2 = new CATMAID.ConnectivityMatrix();
-    assert.deepEqual(cm.connectivityMatrix, expectedMatrix,
+    assert.deepEqual(cm.getFlatMatrix(), expectedMatrix,
         "CATMAID.ConnectivityMatrix preserves matrix when new instances are created");
 
   })();
@@ -69,5 +69,17 @@ QUnit.test('Connectivity matrix test', function( assert ) {
     // Assert that both matrixes are different objects
     assert.ok(cm1.connectivityMatrix !== cm2.connectivityMatrix,
         "CATMAID.ConnectivityMatrix instances have different private matrix objects");
+  })();
+
+  // Test max connection calulation
+  (function() {
+    var cm = new CATMAID.ConnectivityMatrix();
+    cm.rowSkeletonIDs = rowSkeletonIDs;
+    cm.colSkeletonIDs = colSkeletonIDs;
+    // Set connectivity matrix without asking back-end
+    cm.setConnectivityMatrixFromData(data);
+
+    assert.equal(cm.getMaxConnections(), 12,
+        "CATMAID.ConnectivityMatrix.getMaxConnections() computes correctly");
   })();
 });

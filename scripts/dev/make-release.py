@@ -17,7 +17,6 @@
 #
 # Its dependencies are part of the requirements-dev.txt file.
 #
-from __future__ import unicode_literals
 
 import os
 import re
@@ -74,6 +73,7 @@ class CatmaidRelease(object):
     changelog_dev_title = "## Under development"
     changelog_contributor_label = "Contributors:"
     api_changelog_dev_title = "## Under development"
+    update_dev_title = "# Under development"
 
     def __init__(self, catmaid_folder):
         self.git = sh.git.bake(_cwd=catmaid_folder)
@@ -83,6 +83,10 @@ class CatmaidRelease(object):
         # Determine release name
         today = date.today()
         self.release_name = today.strftime("%Y.%m.%d")
+
+        # Get current commit ID
+        self.last_commit_id = self.git("rev-parse", "HEAD").stdout.decode('utf-8').replace('\n', '')
+        log("Last commit: {}".format(self.last_commit_id))
 
         if not confirm("Release name: \"{}\"".format(self.release_name)):
             exit(True)
@@ -95,14 +99,16 @@ class CatmaidRelease(object):
         # Update files references a CATMAID version
         self.update_changelog()
         self.update_api_changelog()
+        self.update_update_info()
+        self.update_version()
         self.update_documentation()
 
         # Create release commit
-        self.git.commit("-a", "-m", "Release {}".format(self.release_name))
+        self.git.commit("-a", "-S", "-m", "Release {}".format(self.release_name))
 
         # Tag commit
         log("Creating tag \"{}\"...".format(self.release_name), False)
-        self.git.tag(self.release_name, "HEAD", "-a", "-m", self.get_tag_message())
+        self.git.tag(self.release_name, "HEAD", "-s", "-a", "-m", self.get_tag_message())
         log("done")
 
     def update_changelog(self):
@@ -167,6 +173,16 @@ class CatmaidRelease(object):
 
         self.update_file("API_CHANGELOG.md", contentfilter)
 
+    def update_update_info(self):
+        def contentfilter(update_data):
+            # Replace first occurrence of development header
+            update_data = re.sub("^{}$".format(self.update_dev_title),
+                 "## {}".format(self.release_name), update_data, 1, re.MULTILINE)
+
+            return update_data
+
+        self.update_file("UPDATE.md", contentfilter)
+
     def update_documentation(self):
         def contentfilter(doc_data):
             # Replace first occurrence of 'version' and 'release' fields
@@ -184,6 +200,25 @@ class CatmaidRelease(object):
         update_api_doc('apidoc')
         self.git.add(os.path.join(self.project_root, 'sphinx-doc/source/_static/api'))
         log("done")
+
+        log("Updating widget documentation...", False)
+        update_widget_doc = sh.make.bake(_cwd=os.path.join(self.project_root, 'sphinx-doc'))
+        update_widget_doc('widgetdoc')
+        self.git.add(os.path.join(self.project_root, 'sphinx-doc/source/_static/widgets'))
+        log("done")
+
+
+    def update_version(self):
+        def contentfilter(doc_data):
+            # Set CATMAID's base version
+            doc_data = re.sub("^BASE_VERSION\s=.*$", "BASE_VERSION = '{}'".format(self.release_name),
+                doc_data, 1, re.MULTILINE)
+            doc_data = re.sub("^BASE_COMMIT\s=.*$", "BASE_COMMIT = '{}'".format(self.last_commit_id),
+                doc_data, 1, re.MULTILINE)
+
+            return doc_data
+
+        self.update_file("django/projects/mysite/utils.py", contentfilter)
 
 
     def update_file(self, relative_path, filterfn):

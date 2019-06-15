@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import copy
 import datetime
@@ -9,12 +8,13 @@ import pytz
 from itertools import chain
 
 from django.db import connection
-from django.utils.six import StringIO
 from catmaid.models import Connector
 from catmaid.tests.apis.common import CatmaidApiTestCase
 from catmaid.control import stats
 from catmaid.control.common import get_relation_to_id_map, get_class_to_id_map
 from guardian.shortcuts import assign_perm
+from io import StringIO
+
 
 class StatsApiTests(CatmaidApiTestCase):
 
@@ -242,9 +242,10 @@ class StatsApiTests(CatmaidApiTestCase):
                 '1': {
                     '20170701': {},
                     '20170702': {
+                        'new_cable_length': 10.0,
                         'new_connectors': 1,
                         'new_reviewed_nodes': 1,
-                        'new_treenodes': 10.0
+                        'new_treenodes': 1,
                     },
                     '20170703': {},
                     '20170704': {},
@@ -313,9 +314,10 @@ class StatsApiTests(CatmaidApiTestCase):
                 },
                 '3': {
                     '20170701': {
+                        'new_cable_length': 7.0,
                         'new_connectors': 3,
                         'new_reviewed_nodes': 4,
-                        'new_treenodes': 7.0
+                        'new_treenodes': 4,
                     },
                     '20170702': {},
                     '20170703': {},
@@ -520,9 +522,10 @@ class StatsApiTests(CatmaidApiTestCase):
                 '1': {
                     '20170701': {},
                     '20170702': {
+                        'new_cable_length': 10.0,
                         'new_connectors': 1,
                         'new_reviewed_nodes': 1,
-                        'new_treenodes': 10.0
+                        'new_treenodes': 1,
                     },
                     '20170703': {},
                     '20170704': {},
@@ -591,9 +594,10 @@ class StatsApiTests(CatmaidApiTestCase):
                 },
                 '3': {
                     '20170701': {
+                        'new_cable_length': 4.0,
                         'new_connectors': 3,
                         'new_reviewed_nodes': 3,
-                        'new_treenodes': 4.0
+                        'new_treenodes': 3,
                     },
                     '20170702': {},
                     '20170703': {},

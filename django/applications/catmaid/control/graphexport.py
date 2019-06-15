@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 
 from catmaid.models import UserRole, Project
@@ -18,7 +17,7 @@ except ImportError:
     pass
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def export_jsongraph(request, project_id):
+def export_jsongraph(request:HttpRequest, project_id) -> JsonResponse:
     p = get_object_or_404(Project, pk=project_id)
     skeletonlist = request.POST.getlist('skeleton_list[]')
     confidence_threshold = int(request.POST.get('confidence_threshold', 0))
@@ -36,7 +35,8 @@ def export_jsongraph(request, project_id):
         order = 0
 
     while order != 0:
-        incoming, outgoing = _skeleton_info_raw( project_id, request.user.id, skeletonlist, 'OR' )[0:2]
+        skeleton_info = _skeleton_info_raw( project_id, request.user.id, skeletonlist, 'OR' )[0:2]
+        incoming, outgoing = skeleton_info['incoming'], skeleton_info['outgoing']
         skeletonlist = set( skeletonlist ).union( set(incoming.keys()) ).union( set(outgoing.keys()) )
         order -= 1
     

@@ -18,6 +18,13 @@
     CATMAID.TileLayer.apply(this, arguments);
     CATMAID.PixiLayer.call(this);
 
+    // If the selected source is block data, return an appropriate layer instead.
+    if (this.tileSource instanceof CATMAID.AbstractImageBlockSource &&
+       !(this instanceof CATMAID.PixiImageBlockLayer)) {
+      this.unregister();
+      return this.constructCopy({}, CATMAID.PixiImageBlockLayer);
+    }
+
     // Replace tiles container.
     this.stackViewer.getLayersView().removeChild(this.tilesContainer);
     this.tilesContainer = this.renderer.view;
@@ -28,7 +35,7 @@
     this._oldZ = undefined;
 
     this._tileRequest = {};
-    this._pixiInterpolationMode = this._interpolationMode ? PIXI.SCALE_MODES.LINEAR : PIXI.SCALE_MODES.NEAREST;
+    this._updatePixiInterpolationMode();
   }
 
   PixiTileLayer.prototype = Object.create(CATMAID.TileLayer.prototype);
@@ -47,17 +54,22 @@
     }
   };
 
+  PixiTileLayer.prototype._updatePixiInterpolationMode = function () {
+    let linear = this.getEffectiveInterpolationMode() === CATMAID.StackLayer.INTERPOLATION_MODES.LINEAR;
+    this._pixiInterpolationMode = linear ? PIXI.SCALE_MODES.LINEAR : PIXI.SCALE_MODES.NEAREST;
+  };
+
   /** @inheritdoc */
-  PixiTileLayer.prototype.setInterpolationMode = function (linear) {
-    this._interpolationMode = linear;
-    this._pixiInterpolationMode = this._interpolationMode ? PIXI.SCALE_MODES.LINEAR : PIXI.SCALE_MODES.NEAREST;
+  PixiTileLayer.prototype.setInterpolationMode = function (mode) {
+    CATMAID.StackLayer.prototype.setInterpolationMode.call(this, mode);
+    this._updatePixiInterpolationMode();
+
     for (var i = 0; i < this._tiles.length; ++i) {
       for (var j = 0; j < this._tiles[0].length; ++j) {
         var texture = this._tiles[i][j].texture;
         if (texture && texture.valid &&
             texture.baseTexture.scaleMode !== this._pixiInterpolationMode) {
-          texture.baseTexture.scaleMode = this._pixiInterpolationMode;
-          texture.update();
+          this._setTextureInterpolationMode(texture, this._pixiInterpolationMode);
         }
       }
     }
@@ -86,7 +98,7 @@
 
     var graphic = new PIXI.Graphics();
     graphic.beginFill(0xFFFFFF,0);
-    graphic.drawRect(0,0,this.tileSource.tileWidth,this.tileSource.tileHeight);
+    graphic.drawRect(0, 0, this.tileWidth, this.tileHeight);
     graphic.endFill();
     var emptyTex = graphic.generateCanvasTexture();
 
@@ -100,8 +112,8 @@
       for (var j = 0; j < cols; ++j) {
         this._tiles[i][j] = new PIXI.Sprite(emptyTex);
         this.batchContainer.addChild(this._tiles[i][j]);
-        this._tiles[i][j].position.x = j * this.tileSource.tileWidth * this.stack.anisotropy.x;
-        this._tiles[i][j].position.y = i * this.tileSource.tileHeight * this.stack.anisotropy.y;
+        this._tiles[i][j].position.x = j * this.tileWidth * this._anisotropy.x;
+        this._tiles[i][j].position.y = i * this.tileHeight * this._anisotropy.y;
 
         if (this.tileSource.transposeTiles.has(this.stack.orientation)) {
           this._tiles[i][j].scale.x = -1.0;
@@ -124,6 +136,11 @@
         scaledStackPosition.z,
         scaledStackPosition.s,
         this.efficiencyThreshold);
+
+    if (this._anisotropy.x !== tileInfo.anisotropy.x ||
+        this._anisotropy.y !== tileInfo.anisotropy.y) {
+      return this.resize(this.stackViewer.viewWidth, this.stackViewer.viewHeight, completionCallback, blocking);
+    }
 
     // By default all needed tiles are shown. This can be changed so that all
     // tiles are hidden, e.g. if the current location is on a broken slice and
@@ -168,12 +185,16 @@
     // individual tiles.
     this.batchContainer.position.x = left;
     this.batchContainer.position.y = top;
-    this.batchContainer.scale.x = tileInfo.mag * this.stack.anisotropy.x;
-    this.batchContainer.scale.y = tileInfo.mag * this.stack.anisotropy.y;
+    this.batchContainer.scale.x = tileInfo.mag * tileInfo.anisotropy.x;
+    this.batchContainer.scale.y = tileInfo.mag * tileInfo.anisotropy.y;
     var toLoad = [];
     var loading = false;
     var y = 0;
     var slicePixelPosition = [tileInfo.z];
+
+    // Clamping to zero can be disable in the stack.
+    let clamp = this.stack.clamp;
+    let [minCol, minRow] = clamp ? [0, 0] : [tileInfo.firstCol, tileInfo.firstRow];
 
     // Update tiles.
     for (var i = this._tileOrigR, ti = 0; ti < rows; ++ti, i = (i+1) % rows) {
@@ -187,8 +208,8 @@
         tile.position.x = x;
         tile.position.y = y;
 
-        if (c >= 0 && c <= tileInfo.lastCol &&
-            r >= 0 && r <= tileInfo.lastRow && showTiles) {
+        if (c >= minCol && c <= tileInfo.lastCol &&
+            r >= minRow && r <= tileInfo.lastRow && showTiles) {
           var source = this.tileSource.getTileURL(project, this.stack, slicePixelPosition,
               c, r, tileInfo.zoom);
 
@@ -200,8 +221,7 @@
                 CATMAID.PixiContext.GlobalTextureManager.inc(source);
                 CATMAID.PixiContext.GlobalTextureManager.dec(tile.texture.baseTexture.imageUrl);
                 if (texture.baseTexture.scaleMode !== this._pixiInterpolationMode) {
-                  texture.baseTexture.scaleMode = this._pixiInterpolationMode;
-                  texture.update();
+                  this._setTextureInterpolationMode(texture, this._pixiInterpolationMode);
                 }
                 tile.texture = texture;
                 tile.visible = true;
@@ -222,9 +242,9 @@
           tile.visible = false;
           this._tilesBuffer[i][j] = false;
         }
-        x += this.tileSource.tileWidth;
+        x += this.tileWidth;
       }
-      y += this.tileSource.tileHeight;
+      y += this.tileHeight;
     }
 
     if (tileInfo.z    === this._oldZ &&
@@ -241,7 +261,10 @@
       // immediately, so that the buffer will be cleared.
       window.clearTimeout(this._swapBuffersTimeout);
       this._swapBuffersTimeout = window.setTimeout(this._swapBuffers.bind(this, true), 3000);
-      var newRequest = CATMAID.PixiContext.GlobalTextureManager.load(toLoad, this._swapBuffers.bind(this, false, this._swapBuffersTimeout));
+      var newRequest = CATMAID.PixiContext.GlobalTextureManager.load(
+          toLoad,
+          this.tileSource.getRequestHeaders(),
+          this._swapBuffers.bind(this, false, this._swapBuffersTimeout));
       CATMAID.PixiContext.GlobalTextureManager.cancel(this._tileRequest);
       this._tileRequest = newRequest;
       loading = true;
@@ -262,15 +285,16 @@
   };
 
   /** @inheritdoc */
-  PixiTileLayer.prototype.resize = function (width, height) {
+  PixiTileLayer.prototype.resize = function (width, height, completionCallback, blocking) {
     CATMAID.PixiLayer.prototype.resize.call(this, width, height);
-    CATMAID.TileLayer.prototype.resize.call(this, width, height);
+    CATMAID.TileLayer.prototype.resize.call(this, width, height, completionCallback, blocking);
   };
 
   /** @inheritdoc */
   PixiTileLayer.prototype._swapBuffers = function (force, timeout) {
     if (timeout && timeout !== this._swapBuffersTimeout) return;
     window.clearTimeout(this._swapBuffersTimeout);
+    this._swapBuffersTimeout = null;
 
     for (var i = 0; i < this._tiles.length; ++i) {
       for (var j = 0; j < this._tiles[0].length; ++j) {
@@ -285,8 +309,7 @@
             CATMAID.PixiContext.GlobalTextureManager.dec(tile.texture.baseTexture.imageUrl);
             tile.texture = texture || PIXI.Texture.fromImage(source);
             if (tile.texture.baseTexture.scaleMode !== this._pixiInterpolationMode) {
-              tile.texture.baseTexture.scaleMode = this._pixiInterpolationMode;
-              tile.texture.update();
+              this._setTextureInterpolationMode(tile.texture, this._pixiInterpolationMode);
             }
             tile.visible = true;
           }
@@ -333,6 +356,16 @@
     var newTileLayer = this.constructCopy({}, CATMAID.TileLayer);
     var layerKey = this.stackViewer.getLayerKey(this);
     this.stackViewer.replaceStackLayer(layerKey, newTileLayer);
+  };
+
+  /** @inheritdoc */
+  PixiTileLayer.prototype._tilePixel = function (tile, x, y) {
+    var img = tile.texture.baseTexture.source;
+    var canvas = document.createElement('canvas');
+    var context = canvas.getContext('2d');
+    context.drawImage(img, 0, 0);
+
+    return Promise.resolve(context.getImageData(x, y, 1, 1).data);
   };
 
   CATMAID.PixiTileLayer = PixiTileLayer;

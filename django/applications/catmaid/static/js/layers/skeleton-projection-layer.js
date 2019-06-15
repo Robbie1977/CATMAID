@@ -35,8 +35,10 @@
     this.skeletonSource.ignoreLocal = true;
 
     CATMAID.PixiLayer.prototype._initBatchContainer.call(this);
-    this.graphics = CATMAID.SkeletonElementsFactory.createSkeletonElements(
-      {pixiLayer: this},
+    this.graphics = CATMAID.SkeletonElementsFactory.createSkeletonElements({
+        pixiLayer: this,
+        stackViewer: stackViewer
+      },
       this.batchContainer);
 
     // Listen to active node change events
@@ -55,7 +57,6 @@
    * The set of options and defaults.
    */
   SkeletonProjectionLayer.options = {
-    opacity: 1.0,
     // Indicate if skeleton should be simplified
     simplify: false,
     // Indicate coloiring mode
@@ -83,7 +84,7 @@
    * Update default options
    */
   SkeletonProjectionLayer.updateDefaultOptions = function(options) {
-    mergeOptions(SkeletonProjectionLayer.options, options || {},
+    CATMAID.mergeOptions(SkeletonProjectionLayer.options, options || {},
         SkeletonProjectionLayer.options, true);
   };
 
@@ -99,7 +100,7 @@
    * optionally be set.
    */
   SkeletonProjectionLayer.prototype.updateOptions = function(options, setDefaults) {
-    mergeOptions(this.options, options || {}, SkeletonProjectionLayer.options,
+    CATMAID.mergeOptions(this.options, options || {}, SkeletonProjectionLayer.options,
         setDefaults);
     // Replace source subscription only if source isn't part of current
     // subscriptions or if there is no subscribed source at the moment.
@@ -186,14 +187,14 @@
     var stackViewBox = this.stackViewer.createStackViewBox();
     var projectViewBox = this.stackViewer.primaryStack.createStackToProjectBox(stackViewBox);
 
-    var screenScale = SkeletonAnnotations.TracingOverlay.Settings.session.screen_scaling;
+    var screenScale = CATMAID.TracingOverlay.Settings.session.screen_scaling;
     // All graphics elements scale automatcally.
     // If in screen scale mode, where the size of all elements should
     // stay the same (regardless of zoom level), counter acting this is required.
     var dynamicScale = screenScale ? (1 / this.stackViewer.scale) : false;
 
     this.graphics.scale(
-        SkeletonAnnotations.TracingOverlay.Settings.session.scale,
+        CATMAID.TracingOverlay.Settings.session.scale,
         this.stackViewer.primaryStack.minPlanarRes,
         dynamicScale);
 
@@ -408,7 +409,6 @@
         this.currentReferenceNodes.get(skid) : getClosestNodeInNormalDir(ap,
             normalDimension, currentProjectPlane);
       if (null !== nodeId) {
-        // Add projection to D3 paper
         this._createProjection(nodeId, ap, skeletonModels[skid]);
       }
     }, this);
@@ -702,7 +702,7 @@
         var falloff = layer.options.distanceFalloff;
         var stackViewer = layer.stackViewer;
         var from = CATMAID.tools.cssColorToRGB(
-            SkeletonAnnotations.TracingOverlay.Settings.session.active_skeleton_color);
+            CATMAID.TracingOverlay.Settings.session.active_skeleton_color);
         var to = CATMAID.tools.cssColorToRGB(color);
         return function(node, pos, z) {
           // Merge colors
@@ -714,22 +714,6 @@
           var b = Math.round((from.b * factor + to.b * invFactor) * 255);
           return "rgb(" + r + "," + g + "," + b + ")";
         };
-      }
-    }
-  };
-
-  /**
-   * Merge source fields into key if they appear in defaults, if a default does
-   * not exist in the source, set it optionally to the default.
-   */
-  var mergeOptions = function(target, source, defaults, setDefaults) {
-    // Only allow options that are defined in the default option list
-    for (var key in defaults) {
-      if (source.hasOwnProperty(key)) {
-        target[key] = source[key];
-      } else if (setDefaults &&
-          defaults.hasOwnProperty(key)) {
-        target[key] = defaults[key];
       }
     }
   };

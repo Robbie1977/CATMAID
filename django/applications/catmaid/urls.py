@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 from django.conf import settings
 from django.conf.urls import url
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import TemplateView
-
-import django.contrib.auth.views as djauth
+from django.urls import reverse_lazy
 
 from rest_framework.decorators import api_view
 
-from catmaid.control import (authentication, user, log, message, client, common,
-        project, stack, stackgroup, tile, tracing, stats, neuron_annotations as
-        annotations, textlabel, label, link, connector, neuron, node, treenode,
-        suppressed_virtual_treenode, skeleton, skeletonexport, treenodeexport,
-        cropping, data_view, ontology, classification, notifications, roi,
-        clustering, volume, flytem, dvid, useranalytics, user_evaluation,
-        search, graphexport, transaction, graph2, circles, analytics, review,
-        wiringdiagram, object, sampler, treenodetable, nat, point, landmarks)
+from catmaid.control import (authentication, user, group, log, message, client,
+        common, project, stack, stackgroup, tile, tracing, stats,
+        annotation, textlabel, label, link, connector,
+        neuron, node, treenode, suppressed_virtual_treenode, skeleton,
+        skeletonexport, treenodeexport, cropping, data_view, ontology,
+        classification, notifications, roi, clustering, volume, noop,
+        useranalytics, user_evaluation, search, graphexport, transaction,
+        graph2, circles, analytics, review, wiringdiagram, object, sampler,
+        similarity, nat, point, landmarks, pointcloud, pointset)
 
 from catmaid.views import CatmaidView
+from catmaid.views.admin import ProjectDeletion
 from catmaid.history import record_request_action as record_view
 
 
@@ -40,6 +40,12 @@ urlpatterns = [
     url(r'^version$', common.get_catmaid_version)
 ]
 
+# Additional administration views
+urlpatterns += [
+    url(r'^admin/catmaid/project/delete-with-data$', ProjectDeletion.as_view(),
+        name="delete-projects-with-data"),
+]
+
 # Authentication and permissions
 urlpatterns += [
     url(r'^accounts/login$', authentication.login_user),
@@ -55,7 +61,13 @@ urlpatterns += [
     url(r'^user-list$', user.user_list),
     url(r'^user-table-list$', user.user_list_datatable),
     url(r'^user-profile/update$', user.update_user_profile),
-    url(r'^user/password_change/$', user.change_password, {'post_change_redirect': 'catmaid:home'}),
+    url(r'^user/password_change/$', user.NonAnonymousPasswordChangeView.as_view(
+            success_url=reverse_lazy('catmaid:home'), raise_exception=False)),
+]
+
+# Groups
+urlpatterns += [
+    url(r'^groups/$', group.GroupList.as_view())
 ]
 
 # Log
@@ -95,6 +107,7 @@ urlpatterns += [
 urlpatterns += [
     url(r'^(?P<project_id>\d+)/stacks$', stack.stacks),
     url(r'^(?P<project_id>\d+)/stack/(?P<stack_id>\d+)/info$', stack.stack_info),
+    url(r'^(?P<project_id>\d+)/stack/(?P<stack_id>\d+)/groups$', stack.stack_groups),
 ]
 
 # General stack group access
@@ -126,6 +139,7 @@ urlpatterns += [
     url(r'^(?P<project_id>\d+)/samplers/domains/(?P<domain_id>\d+)/intervals/add-all$', sampler.add_all_intervals),
     url(r'^(?P<project_id>\d+)/samplers/domains/intervals/(?P<interval_id>\d+)/details$', sampler.get_interval_details),
     url(r'^(?P<project_id>\d+)/samplers/domains/intervals/(?P<interval_id>\d+)/set-state$', sampler.set_interval_state),
+    url(r'^(?P<project_id>\d+)/samplers/(?P<sampler_id>\d+)/$', sampler.SamplerDetail.as_view()),
     url(r'^(?P<project_id>\d+)/samplers/(?P<sampler_id>\d+)/delete$', sampler.delete_sampler),
     url(r'^(?P<project_id>\d+)/samplers/(?P<sampler_id>\d+)/domains/$', sampler.list_sampler_domains),
     url(r'^(?P<project_id>\d+)/samplers/(?P<sampler_id>\d+)/domains/add$', sampler.add_sampler_domain),
@@ -139,24 +153,27 @@ urlpatterns += [
 
 # Statistics
 urlpatterns += [
+    url(r'^(?P<project_id>\d+)/stats/cable-length$', stats.stats_cable_length),
     url(r'^(?P<project_id>\d+)/stats/nodecount$', stats.stats_nodecount),
     url(r'^(?P<project_id>\d+)/stats/editor$', stats.stats_editor),
     url(r'^(?P<project_id>\d+)/stats/summary$', stats.stats_summary),
     url(r'^(?P<project_id>\d+)/stats/history$', stats.stats_history),
     url(r'^(?P<project_id>\d+)/stats/user-history$', stats.stats_user_history),
     url(r'^(?P<project_id>\d+)/stats/user-activity$', stats.stats_user_activity),
+    url(r'^(?P<project_id>\d+)/stats/server$', stats.ServerStats.as_view()),
 ]
 
 # Annotations
 urlpatterns += [
-    url(r'^(?P<project_id>\d+)/annotations/$', annotations.list_annotations),
-    url(r'^(?P<project_id>\d+)/annotations/query$', annotations.annotations_for_entities),
-    url(r'^(?P<project_id>\d+)/annotations/forskeletons$', annotations.annotations_for_skeletons),
-    url(r'^(?P<project_id>\d+)/annotations/table-list$', annotations.list_annotations_datatable),
-    url(r'^(?P<project_id>\d+)/annotations/add$', record_view("annotations.add")(annotations.annotate_entities)),
-    url(r'^(?P<project_id>\d+)/annotations/remove$', record_view("annotations.remove")(annotations.remove_annotations)),
-    url(r'^(?P<project_id>\d+)/annotations/(?P<annotation_id>\d+)/remove$', record_view("annotations.remove")(annotations.remove_annotation)),
-    url(r'^(?P<project_id>\d+)/annotations/query-targets$', annotations.query_annotated_classinstances),
+    url(r'^(?P<project_id>\d+)/annotations/$', annotation.list_annotations),
+    url(r'^(?P<project_id>\d+)/annotations/query$', annotation.annotations_for_entities),
+    url(r'^(?P<project_id>\d+)/annotations/forskeletons$', annotation.annotations_for_skeletons),
+    url(r'^(?P<project_id>\d+)/annotations/table-list$', annotation.list_annotations_datatable),
+    url(r'^(?P<project_id>\d+)/annotations/add$', record_view("annotations.add")(annotation.annotate_entities)),
+    url(r'^(?P<project_id>\d+)/annotations/add-neuron-names$', record_view("annotations.addneuronname")(annotation.add_neuron_name_annotations)),
+    url(r'^(?P<project_id>\d+)/annotations/remove$', record_view("annotations.remove")(annotation.remove_annotations)),
+    url(r'^(?P<project_id>\d+)/annotations/(?P<annotation_id>\d+)/remove$', record_view("annotations.remove")(annotation.remove_annotation)),
+    url(r'^(?P<project_id>\d+)/annotations/query-targets$', annotation.query_annotated_classinstances),
 ]
 
 # Text labels
@@ -170,6 +187,7 @@ urlpatterns += [
 # Treenode labels
 urlpatterns += [
     url(r'^(?P<project_id>\d+)/labels/$', label.labels_all),
+    url(r'^(?P<project_id>\d+)/labels/detail$', label.labels_all_detail),
     url(r'^(?P<project_id>\d+)/labels/stats$', label.get_label_stats),
     url(r'^(?P<project_id>\d+)/labels-for-nodes$', label.labels_for_nodes),
     url(r'^(?P<project_id>\d+)/labels/(?P<node_type>(treenode|location|connector))/(?P<node_id>\d+)/$', label.labels_for_node),
@@ -201,6 +219,7 @@ urlpatterns += [
         connector.connector_detail),
     url(r'^(?P<project_id>\d+)/connectors/user-info$', connector.connector_user_info),
     url(r'^(?P<project_id>\d+)/connectors/types/$', connector.connector_types),
+    url(r'^(?P<project_id>\d+)/connectors/in-bounding-box$', connector.connectors_in_bounding_box),
 ]
 
 # Neuron access
@@ -218,7 +237,7 @@ urlpatterns += [
     url(r'^(?P<project_id>\d+)/node/(?P<node_id>\d+)/reviewed$', record_view("nodes.add_or_update_review")(node.update_location_reviewer)),
     url(r'^(?P<project_id>\d+)/nodes/most-recent$', node.most_recent_treenode),
     url(r'^(?P<project_id>\d+)/nodes/location$', node.get_locations),
-    url(r'^(?P<project_id>\d+)/node/nearest$', node.node_nearest),
+    url(r'^(?P<project_id>\d+)/nodes/nearest$', node.node_nearest),
     url(r'^(?P<project_id>\d+)/node/update$', record_view("nodes.update_location")(node.node_update)),
     url(r'^(?P<project_id>\d+)/node/list$', node.node_list_tuples),
     url(r'^(?P<project_id>\d+)/node/get_location$', node.get_location),
@@ -255,13 +274,17 @@ urlpatterns += [
 # General skeleton access
 urlpatterns += [
     url(r'^(?P<project_id>\d+)/skeletons/$', skeleton.list_skeletons),
+    url(r'^(?P<project_id>\d+)/skeletons/cable-length$', skeleton.cable_lengths),
+    url(r'^(?P<project_id>\d+)/skeletons/connectivity-counts$', skeleton.connectivity_counts),
     url(r'^(?P<project_id>\d+)/skeleton/(?P<skeleton_id>\d+)/node_count$', skeleton.node_count),
     url(r'^(?P<project_id>\d+)/skeleton/(?P<skeleton_id>\d+)/neuronname$', skeleton.neuronname),
     url(r'^(?P<project_id>\d+)/skeleton/neuronnames$', skeleton.neuronnames),
     url(r'^(?P<project_id>\d+)/skeleton/node/(?P<treenode_id>\d+)/node_count$', skeleton.node_count),
     url(r'^(?P<project_id>\d+)/skeleton/(?P<skeleton_id>\d+)/review/reset-own$', record_view("skeletons.reset_own_reviews")(skeleton.reset_own_reviewer_ids)),
     url(r'^(?P<project_id>\d+)/skeletons/connectivity$', skeleton.skeleton_info_raw),
+    url(r'^(?P<project_id>\d+)/skeletons/in-bounding-box$', skeleton.skeletons_in_bounding_box),
     url(r'^(?P<project_id>\d+)/skeleton/connectivity_matrix$', skeleton.connectivity_matrix),
+    url(r'^(?P<project_id>\d+)/skeletons/connectivity_matrix/csv$', skeleton.connectivity_matrix_csv),
     url(r'^(?P<project_id>\d+)/skeletons/review-status$', skeleton.review_status),
     url(r'^(?P<project_id>\d+)/skeleton/(?P<skeleton_id>\d+)/statistics$', skeleton.skeleton_statistics),
     url(r'^(?P<project_id>\d+)/skeleton/(?P<skeleton_id>\d+)/contributor_statistics$', skeleton.contributor_statistics),
@@ -269,15 +292,19 @@ urlpatterns += [
     url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/find-labels$', skeleton.find_labels),
     url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/open-leaves$', skeleton.open_leaves),
     url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/root$', skeleton.root_for_skeleton),
+    url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/sampler-count$', skeleton.sampler_count),
+    url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/cable-length$', skeleton.cable_length),
     url(r'^(?P<project_id>\d+)/skeleton/split$', record_view("skeletons.split")(skeleton.split_skeleton)),
     url(r'^(?P<project_id>\d+)/skeleton/ancestry$', skeleton.skeleton_ancestry),
     url(r'^(?P<project_id>\d+)/skeleton/join$', record_view("skeletons.merge")(skeleton.join_skeleton)),
     url(r'^(?P<project_id>\d+)/skeleton/reroot$', record_view("skeletons.reroot")(skeleton.reroot_skeleton)),
+    url(r'^(?P<project_id>\d+)/skeletons/sampler-count$', skeleton.list_sampler_count),
     url(r'^(?P<project_id>\d+)/skeleton/(?P<skeleton_id>\d+)/permissions$', skeleton.get_skeleton_permissions),
     url(r'^(?P<project_id>\d+)/skeletons/import$', record_view("skeletons.import")(skeleton.import_skeleton)),
     url(r'^(?P<project_id>\d+)/skeleton/annotationlist$', skeleton.annotation_list),
     url(r'^(?P<project_id>\d+)/skeletons/within-spatial-distance$', skeleton.within_spatial_distance),
     url(r'^(?P<project_id>\d+)/skeletons/node-labels$', skeleton.skeletons_by_node_labels),
+    url(r'^(?P<project_id>\d+)/skeletons/change-history$', skeleton.change_history),
     url(r'^(?P<project_id>\d+)/skeletongroup/adjacency_matrix$', skeleton.adjacency_matrix),
     url(r'^(?P<project_id>\d+)/skeletongroup/skeletonlist_subgraph', skeleton.skeletonlist_subgraph),
     url(r'^(?P<project_id>\d+)/skeletongroup/all_shared_connectors', skeleton.all_shared_connectors),
@@ -298,8 +325,10 @@ urlpatterns += [
     url(r'^(?P<project_id>\d+)/skeletons/measure$', skeletonexport.measure_skeletons),
     url(r'^(?P<project_id>\d+)/skeleton/connectors-by-partner$', skeletonexport.skeleton_connectors_by_partner),
     url(r'^(?P<project_id>\d+)/skeletons/partners-by-connector$', skeletonexport.partners_by_connector),
+    url(r'^(?P<project_id>\d+)/skeletons/connector-polyadicity$', skeletonexport.connector_polyadicity),
     url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/compact-detail$', skeletonexport.compact_skeleton_detail),
     url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/neuroglancer$', skeletonexport.neuroglancer_skeleton),
+    url(r'^(?P<project_id>\d+)/skeletons/(?P<skeleton_id>\d+)/node-overview$', skeletonexport.treenode_overview),
     url(r'^(?P<project_id>\d+)/skeletons/compact-detail$', skeletonexport.compact_skeleton_detail_many),
     # Marked as deprecated, but kept for backwards compatibility
     url(r'^(?P<project_id>\d+)/(?P<skeleton_id>\d+)/(?P<with_connectors>\d)/(?P<with_tags>\d)/compact-skeleton$', skeletonexport.compact_skeleton),
@@ -309,6 +338,30 @@ urlpatterns += [
 urlpatterns += [
     url(r'^(?P<project_id>\d+)/connectorarchive/export$', treenodeexport.export_connectors),
     url(r'^(?P<project_id>\d+)/treenodearchive/export$', treenodeexport.export_treenodes),
+]
+
+# Pointclouds
+urlpatterns += [
+    url(r'^(?P<project_id>\d+)/pointclouds/$', pointcloud.PointCloudList.as_view()),
+    url(r'^(?P<project_id>\d+)/pointclouds/(?P<pointcloud_id>\d+)/$', pointcloud.PointCloudDetail.as_view()),
+    url(r'^(?P<project_id>\d+)/pointclouds/(?P<pointcloud_id>\d+)/images/(?P<image_id>\d+)/$', pointcloud.PointCloudImageDetail.as_view()),
+]
+
+# Pointsets
+urlpatterns += [
+    url(r'^(?P<project_id>\d+)/pointsets/$', pointset.PointSetList.as_view()),
+    url(r'^(?P<project_id>\d+)/pointsets/(?P<pointset_id>\d+)/$', pointset.PointSetDetail.as_view()),
+]
+
+urlpatterns += [
+    url(r'^(?P<project_id>\d+)/similarity/configs/$', similarity.ConfigurationList.as_view()),
+    url(r'^(?P<project_id>\d+)/similarity/configs/(?P<config_id>\d+)/$', similarity.ConfigurationDetail.as_view()),
+    url(r'^(?P<project_id>\d+)/similarity/configs/(?P<config_id>\d+)/recompute$', similarity.recompute_config),
+    url(r'^(?P<project_id>\d+)/similarity/queries/$', similarity.SimilarityList.as_view()),
+    url(r'^(?P<project_id>\d+)/similarity/queries/similarity$', similarity.compare_skeletons),
+    url(r'^(?P<project_id>\d+)/similarity/queries/(?P<similarity_id>\d+)/$', similarity.SimilarityDetail.as_view()),
+    url(r'^(?P<project_id>\d+)/similarity/queries/(?P<similarity_id>\d+)/recompute$', similarity.recompute_similarity),
+    url(r'^(?P<project_id>\d+)/similarity/test-setup$', similarity.test_setup),
 ]
 
 # Cropping
@@ -370,8 +423,6 @@ urlpatterns += [
 urlpatterns += [
     url(r'^(?P<project_id>{0})/classification/(?P<workspace_pid>{0})/roots/$'.format(integer),
         classification.get_classification_roots),
-    url(r'^(?P<project_id>{0})/classification/(?P<workspace_pid>{0})/number$'.format(integer),
-        classification.get_classification_number),
     url(r'^(?P<project_id>{0})/classification/(?P<workspace_pid>{0})/setup/test$'.format(integer),
         classification.check_classification_setup_view, name='test_classification_setup'),
     url(r'^(?P<project_id>{0})/classification/(?P<workspace_pid>{0})/setup/rebuild$'.format(integer),
@@ -433,9 +484,17 @@ urlpatterns += [
             landmarks.LandmarkLocationList.as_view()),
     url(r'^(?P<project_id>{0})/landmarks/(?P<landmark_id>[0-9]+)/locations/(?P<location_id>[0-9]+)/$'.format(integer),
             landmarks.LandmarkLocationDetail.as_view()),
+    url(r'^(?P<project_id>{0})/landmarks/(?P<landmark_id>[0-9]+)/groups/(?P<group_id>[0-9]+)/$'.format(integer),
+            landmarks.LandmarkAndGroupkLocationDetail.as_view()),
     url(r'^(?P<project_id>{0})/landmarks/groups/$'.format(integer), landmarks.LandmarkGroupList.as_view()),
     url(r'^(?P<project_id>{0})/landmarks/groups/import$'.format(integer), landmarks.LandmarkGroupImport.as_view()),
+    url(r'^(?P<project_id>{0})/landmarks/groups/materialize$'.format(integer), landmarks.LandmarkGroupMaterializer.as_view()),
+    url(r'^(?P<project_id>{0})/landmarks/groups/links/$'.format(integer), landmarks.LandmarkGroupLinks.as_view()),
+    url(r'^(?P<project_id>{0})/landmarks/groups/links/(?P<link_id>[0-9]+)/$'.format(integer),
+            landmarks.LandmarkGroupLinkDetail.as_view()),
     url(r'^(?P<project_id>{0})/landmarks/groups/(?P<landmarkgroup_id>[0-9]+)/$'.format(integer), landmarks.LandmarkGroupDetail.as_view()),
+    url(r'^(?P<project_id>{0})/landmarks/groups/(?P<landmarkgroup_id>[0-9]+)/transitively-linked$'.format(integer),
+        landmarks.LandmarkGroupLinkage.as_view()),
     url(r'^(?P<project_id>{0})/landmarks/groups/(?P<landmarkgroup_id>[0-9]+)/locations/(?P<location_id>[0-9]+)/$'.format(integer),
             landmarks.LandmarkGroupLocationList.as_view()),
 ]
@@ -453,8 +512,12 @@ urlpatterns += [
 urlpatterns += [
    url(r'^(?P<project_id>\d+)/volumes/$', volume.volume_collection),
    url(r'^(?P<project_id>\d+)/volumes/add$', record_view("volumes.create")(volume.add_volume)),
-   url(r'^(?P<project_id>\d+)/volumes/(?P<volume_id>\d+)/$', volume.volume_detail),
+   url(r'^(?P<project_id>\d+)/volumes/import$', volume.import_volumes),
+   url(r'^(?P<project_id>\d+)/volumes/entities/$', volume.get_volume_entities),
+   url(r'^(?P<project_id>\d+)/volumes/skeleton-innervations$', volume.get_skeleton_innervations),
+   url(r'^(?P<project_id>\d+)/volumes/(?P<volume_id>\d+)/$', volume.VolumeDetail.as_view()),
    url(r'^(?P<project_id>\d+)/volumes/(?P<volume_id>\d+)/intersect$', volume.intersects),
+   url(r'^(?P<project_id>\d+)/volumes/(?P<volume_id>\d+)/export\.(?P<extension>\w+)', volume.export_volume),
 ]
 
 # Analytics
@@ -499,21 +562,22 @@ urlpatterns += [
 
     # Annotation graph export
     url(r'^(?P<project_id>\d+)/annotationdiagram/nx_json$', object.convert_annotations_to_networkx),
-
-    # Treenode table
-    url(r'^(?P<project_id>\d+)/treenode/table/(?P<skid>\d+)/content$', treenodetable.treenode_table_content),
 ]
 
-# Patterns for FlyTEM access
-from catmaid.control.flytem import (project as flytemproject,
-        review as flytemreview, stack as flytemstack)
+# Patterns for Janelia render web service access
+from catmaid.control.janelia_render import (
+    project as janelia_render_project,
+    review as janelia_render_review,
+    stack as janelia_render_stack)
 urlpatterns += [
-    url(r'^flytem/projects/$', flytemproject.projects),
-    url(r'^(?P<project_id>.+)/user/reviewer-whitelist$', flytemreview.reviewer_whitelist),
-    url(r'^flytem/(?P<project_id>.+)/stack/(?P<stack_id>.+)/info$', flytem.stack.stack_info),
-    url(r'^flytem/(?P<project_id>.+)/stacks$', flytemstack.stacks),
-    url(r'^flytem/(?P<project_id>.+)/annotations/$', flytem.list_annotations),
-    url(r'^flytem/client/datastores/(?P<name>[\w-]+)/$', flytem.datastore_settings),
+    url(r'^janelia-render/projects/$', janelia_render_project.projects),
+    url(r'^(?P<project_id>.+)/user/reviewer-whitelist$', janelia_render_review.reviewer_whitelist),
+    url(r'^(?P<project_id>.+)/interpolatable-sections/$', noop.interpolatable_sections),
+    url(r'^janelia-render/(?P<project_id>.+)/stack/(?P<stack_id>.+)/info$', janelia_render_stack.stack_info),
+    url(r'^janelia-render/(?P<project_id>.+)/stacks$', janelia_render_stack.stacks),
+    url(r'^janelia-render/(?P<project_id>.+)/annotations/$', noop.list_annotations),
+    url(r'^janelia-render/(?P<project_id>.+)/annotations/query-targets$', noop.query_annotation_targets),
+    url(r'^janelia-render/client/datastores/(?P<name>[\w-]+)/$', noop.datastore_settings),
 ]
 
 # Patterns for DVID access
@@ -522,8 +586,10 @@ from catmaid.control.dvid import (project as dvidproject,
 urlpatterns += [
     url(r'^dvid/projects/$', dvidproject.projects),
     url(r'^(?P<project_id>.+)/user/reviewer-whitelist$', dvidreview.reviewer_whitelist),
+    url(r'^(?P<project_id>.+)/interpolatable-sections/$', noop.interpolatable_sections),
     url(r'^dvid/(?P<project_id>.+)/stack/(?P<stack_id>.+)/info$', dvidstack.stack_info),
     url(r'^dvid/(?P<project_id>.+)/stacks$', dvidstack.stacks),
-    url(r'^dvid/(?P<project_id>.+)/annotations/$', dvid.list_annotations),
-    url(r'^dvid/client/datastores/(?P<name>[\w-]+)/$', dvid.datastore_settings),
+    url(r'^dvid/(?P<project_id>.+)/annotations/$', noop.list_annotations),
+    url(r'^dvid/(?P<project_id>.+)/annotations/query-targets$', noop.query_annotation_targets),
+    url(r'^dvid/client/datastores/(?P<name>[\w-]+)/$', noop.datastore_settings),
 ]

@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import logging
 
@@ -13,6 +12,7 @@ except ImportError:
         "Ontology clustering will not be available")
 
 import numpy as np
+from typing import List
 
 from django import forms
 from django.forms.formsets import formset_factory
@@ -23,7 +23,7 @@ from formtools.wizard.views import SessionWizardView
 
 from catmaid.models import Class
 from catmaid.control.classification import (ClassInstanceProxy,
-    get_root_classes_qs, graphs_instanciate_features)
+    get_root_classes_qs, graphs_instantiate_features)
 from catmaid.control.ontology import get_features
 
 
@@ -43,7 +43,7 @@ linkages = (
     ('ward', 'Ward'),
 )
 
-def create_ontology_selection_form( workspace_pid, class_ids=None ):
+def create_ontology_selection_form(workspace_pid, class_ids=None):
     """ Creates a new SelectOntologyForm class with an up-to-date
     class queryset.
     """
@@ -101,8 +101,8 @@ class ClusteringWizard(SessionWizardView):
             graphs = gcd('classifications')['classification_graphs']
             add_nonleafs = True
             # Featurs are abstract concepts (classes) and graphs will be
-            # checked which classes they have instanciated.
-            raw_features = []
+            # checked which classes they have instantiated.
+            raw_features = [] # type: List
             for o in ontologies:
                 raw_features = raw_features + get_features( o, self.workspace_pid,
                     graphs, add_nonleafs, only_used_features )
@@ -157,7 +157,7 @@ class ClusteringWizard(SessionWizardView):
 
         return context
 
-    def done(self, form_list, **kwargs):
+    def done(self, form_list, **kwargs) -> JsonResponse:
         cleaned_data = [form.cleaned_data for form in form_list]
         ontologies = cleaned_data[0].get('ontologies')
         graphs = cleaned_data[1].get('classification_graphs')
@@ -172,7 +172,9 @@ class ClusteringWizard(SessionWizardView):
 
         # Create binary matrix
         logger.debug("Clustering: Creating binary matrix")
-        bin_matrix = create_binary_matrix(graphs, features)
+        bin_matrix = create_binary_matrix(graphs, features) # type: np.ndarray
+                                                            # maintenance concern: this wrapper for graphs_instantiate_features
+                                                            # is required for the later bin_matrix.tolist() to be valid
         # Calculate the distance matrix
         logger.debug("Clustering: creating distsance matrix")
         dst_matrix = dist.pdist(bin_matrix, metric)
@@ -211,8 +213,8 @@ def setup_clustering(request, workspace_pid=None):
     view = ClusteringWizard.as_view(forms, workspace_pid=workspace_pid)
     return view(request)
 
-def create_binary_matrix(graphs, features):
+def create_binary_matrix(graphs, features) -> np.ndarray:
     """ Creates a binary matrix for the graphs passed."""
-    matrix = np.zeros((len(graphs),len(features)), dtype=np.int)
-    return graphs_instanciate_features(graphs, features, matrix)
+    matrix = np.zeros((len(graphs),len(features)), dtype=np.int) # type: np.ndarray
+    return graphs_instantiate_features(graphs, features, matrix)
 

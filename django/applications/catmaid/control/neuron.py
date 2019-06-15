@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
+from collections import defaultdict
+import datetime
+from functools import reduce
 import json
-import six
+import operator
+from typing import Any, DefaultDict, List, Optional, Tuple
 
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.db import connection
 from django.contrib.auth.models import User
@@ -18,14 +21,14 @@ from catmaid.models import UserRole, Project, Class, ClassInstance, \
 
 from rest_framework.decorators import api_view
 
-import operator
-from collections import defaultdict
-
-from six.moves import map
 
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def get_all_skeletons_of_neuron(request, project_id=None, neuron_id=None):
+def get_all_skeletons_of_neuron(request:HttpRequest, project_id=None, neuron_id=None) -> JsonResponse:
+    skeleton_ids = _get_all_skeletons_of_neuron(project_id, neuron_id)
+    return JsonResponse(skeleton_ids, safe=False)
+
+def _get_all_skeletons_of_neuron(project_id, neuron_id) -> List:
     p = get_object_or_404(Project, pk=project_id)
     neuron = get_object_or_404(ClassInstance,
         pk=neuron_id,
@@ -35,9 +38,9 @@ def get_all_skeletons_of_neuron(request, project_id=None, neuron_id=None):
         project=p,
         cici_via_a__relation__relation_name='model_of',
         cici_via_a__class_instance_b=neuron)
-    return JsonResponse([x.id for x in qs], safe=False)
+    return [x.id for x in qs]
 
-def _delete_if_empty(neuron_id):
+def _delete_if_empty(neuron_id) -> bool:
     """ Delete this neuron if no class_instance is a model_of it;
     which is to say, it contains no skeletons. """
     is_empty = not ClassInstanceClassInstance.objects.filter(
@@ -48,7 +51,7 @@ def _delete_if_empty(neuron_id):
     return is_empty
 
 @requires_user_role(UserRole.Annotate)
-def delete_neuron(request, project_id=None, neuron_id=None):
+def delete_neuron(request:HttpRequest, project_id=None, neuron_id=None) -> JsonResponse:
     """ Deletes a neuron if and only if two things are the case: 1. The user
     ownes all treenodes of the skeleton modeling the neuron in question and
     2. The neuron is not annotated by other users.
@@ -98,7 +101,7 @@ def delete_neuron(request, project_id=None, neuron_id=None):
             root_node = Treenode.objects.get(
                     skeleton_id=skeleton_ids[0], parent=None)
             root_location = (root_node.location_x, root_node.location_y,
-                             root_node.location_z)
+                             root_node.location_z) # type: Optional[Tuple[Any, Any, Any]]
         except (Treenode.DoesNotExist, Treenode.MultipleObjectsReturned):
             root_location = None
     else:
@@ -150,7 +153,7 @@ def delete_neuron(request, project_id=None, neuron_id=None):
     })
 
 @requires_user_role(UserRole.Annotate)
-def give_neuron_to_other_user(request, project_id=None, neuron_id=None):
+def give_neuron_to_other_user(request:HttpRequest, project_id=None, neuron_id=None) -> JsonResponse:
     neuron_id = int(neuron_id)
     target_user = User.objects.get(pk=int(request.POST['target_user_id']))
 
@@ -163,18 +166,19 @@ def give_neuron_to_other_user(request, project_id=None, neuron_id=None):
     qs = ClassInstanceClassInstance.objects.filter(
             class_instance_b=neuron_id,
             relation__relation_name='model_of').values_list('class_instance_a__user_id', 'class_instance_a')
-    skeletons = defaultdict(list) # user_id vs list of owned skeletons
+    skeletons = defaultdict(list) # type: DefaultDict[Any, List]
+                                  # user_id vs list of owned skeletons
     for row in qs:
         skeletons[row[0]].append(row[1])
 
     if not skeletons:
         return JsonResponse({'error': 'The neuron does not contain any skeletons!'})
 
-    sks = {k:v[:] for k,v in six.iteritems(skeletons)} # deep copy
+    sks = {k:v[:] for k,v in skeletons.items()} # deep copy
     if request.user.id in sks:
         del sks[request.user.id]
     if not request.user.is_superuser and sks:
-        skeleton_ids = reduce(operator.add, six.itervalues(sks))
+        skeleton_ids = reduce(operator.add, sks.values())
         return JsonResponse({'error': 'You don\'t own: %s' % skeleton_ids})
 
     # 2. Change neuron's and skeleton's and class_instance_class_instance relationship owner to target_user
@@ -188,7 +192,7 @@ def give_neuron_to_other_user(request, project_id=None, neuron_id=None):
     ClassInstance.objects.filter(pk=neuron_id).update(user=target_user)
 
     # Update user_id of the skeleton(s)
-    skeleton_ids = reduce(operator.add, six.itervalues(skeletons))
+    skeleton_ids = reduce(operator.add, skeletons.values())
     ClassInstance.objects.filter(pk__in=skeleton_ids).update(user=target_user)
 
     return JsonResponse({'success':'Moved neuron #%s to %s staging area.'})
@@ -196,7 +200,7 @@ def give_neuron_to_other_user(request, project_id=None, neuron_id=None):
 
 @api_view(['POST'])
 @requires_user_role(UserRole.Annotate)
-def rename_neuron(request, project_id=None, neuron_id=None):
+def rename_neuron(request:HttpRequest, project_id=None, neuron_id=None) -> JsonResponse:
     """Rename a neuron.
 
     If a neuron is not locked by a user on which the current user has no
@@ -256,7 +260,7 @@ def rename_neuron(request, project_id=None, neuron_id=None):
 
 @api_view(['POST'])
 @requires_user_role(UserRole.Browse)
-def get_neuron_ids_from_models(request, project_id=None):
+def get_neuron_ids_from_models(request:HttpRequest, project_id=None) -> JsonResponse:
     """Retrieve neuron IDs modeled by particular entities, eg skeletons.
 
     From a list of source entities (class instances), the IDs of all modeled
@@ -305,7 +309,7 @@ def get_neuron_ids_from_models(request, project_id=None):
 
 @api_view(['GET'])
 @requires_user_role(UserRole.Browse)
-def list_neurons(request, project_id):
+def list_neurons(request:HttpRequest, project_id) -> JsonResponse:
     """List neurons matching filtering criteria.
 
     The result set is the intersection of neurons matching criteria (the
@@ -355,9 +359,9 @@ def list_neurons(request, project_id):
     if created_by:
         created_by = int(created_by)
     if from_date:
-        from_date = datetime.strptime(from_date, '%Y%m%d')
+        from_date = datetime.datetime.strptime(from_date, '%Y%m%d')
     if to_date:
-        to_date = datetime.strptime(to_date, '%Y%m%d')
+        to_date = datetime.datetime.strptime(to_date, '%Y%m%d')
 
     response = _list_neurons(project_id, created_by, reviewed_by, from_date,
                 to_date, nodecount_gt)
@@ -365,7 +369,7 @@ def list_neurons(request, project_id):
 
 
 def _list_neurons(project_id, created_by, reviewed_by, from_date, to_date,
-        nodecount_gt):
+        nodecount_gt) -> List:
     """ Returns a list of neuron IDs of which nodes exist that fulfill the
     given constraints (if any). It can be constrained who created nodes in this
     neuron during a given period of time. Having nodes that are reviewed by

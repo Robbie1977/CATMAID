@@ -47,23 +47,22 @@ QUnit.test('Tracing overlay test', function( assert ) {
     // Mock SVG overlay
     var nodeID = 42;
     var FakeOverlay = function() {
-      this.nodes = {
-        '41': {
+      this.nodes = new Map([[
+        41, {
           id: 41,
           canEdit: function () { return true; },
           type: SkeletonAnnotations.TYPE_NODE,
           obliterate: function() {},
           drawEdges: function() {}
-        },
-        '42': {
+        }], [
+        42, {
           id: 42,
           canEdit: function () { return true; },
           type: SkeletonAnnotations.TYPE_NODE,
           obliterate: function() {},
           drawEdges: function() {},
           x: 0, y:0, z:0
-        }
-      };
+        }]]);
       this.nodeIDsNeedingSync = new Set([41, 42]);
       this.state = new CATMAID.GenericState({
         getNode: function(nodeId) {
@@ -80,7 +79,7 @@ QUnit.test('Tracing overlay test', function( assert ) {
         },
       });
       this.selectNode = function() {};
-      this.submit = submitterFn();
+      this.submit = CATMAID.submitterFn();
       var space = {
         min: {x: -Infinity, y: -Infinity, z: -Infinity},
         max: {x: Infinity, y: Infinity, z: Infinity}
@@ -99,7 +98,7 @@ QUnit.test('Tracing overlay test', function( assert ) {
         _renderIfReady: CATMAID.noop
       };
     };
-    FakeOverlay.prototype = Object.create(SkeletonAnnotations.TracingOverlay.prototype);
+    FakeOverlay.prototype = Object.create(CATMAID.TracingOverlay.prototype);
     var fakeOverlay = new FakeOverlay();
 
     // Indicates which nodes are available in our fake backend
@@ -154,7 +153,7 @@ QUnit.test('Tracing overlay test', function( assert ) {
       });
 
     // Delete node
-    SkeletonAnnotations.TracingOverlay.prototype.deleteNode.call(
+    CATMAID.TracingOverlay.prototype.deleteNode.call(
         fakeOverlay, nodeID);
     // Mark the node as deleted in fake backend, once the last request is done
     fakeOverlay.submit.then(function() {

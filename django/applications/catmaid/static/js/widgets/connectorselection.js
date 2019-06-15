@@ -24,6 +24,10 @@
           text = 'Synapses presynaptic to';
         } else if ('gapjunction_with' === relation) {
           text = 'Gap junctions with';
+        } else if ('tightjunction_with' === relation) {
+          text = 'Tight junction with';
+        } else if ('desmosome_with' === relation) {
+          text = 'Desmosome with';
         }
         if (text !== undefined) {
           text += ' neuron' + (skids1.length > 1 ? 's' : '') + ' '
@@ -180,7 +184,7 @@
       CATMAID.warn("No connectors to show");
       return;
     }
-    WindowMaker.show('create-connector-selection');
+    WindowMaker.show('connector-selection');
     // Write the label
     $('#connector-selection-label').text(header);
 
@@ -251,7 +255,7 @@
   CATMAID.registerWidget({
     name: "Connector Selection",
     description: "A simple connector table",
-    key: "create-connector-selection",
+    key: "connector-selection",
     creator: ConnectorSelection
   });
 

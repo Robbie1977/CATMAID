@@ -137,7 +137,7 @@ jQuery.expr[":"].icontainsnot = jQuery.expr.createPseudo(function(arg) {
  *
  * TODO: Remove this workaround once issue #7361 in Three.js is resolved.
  */
-(function() {
+(function(CATMAID) {
   var originalGeometry = THREE.Geometry;
   THREE.Geometry = function() {
     // Call original constructor
@@ -163,4 +163,27 @@ jQuery.expr[":"].icontainsnot = jQuery.expr.createPseudo(function(arg) {
   };
   THREE.Geometry.prototype = originalGeometry.prototype;
   THREE.Geometry.prototype.constructor = originalGeometry.constructor;
-})();
+
+  CATMAID.THREE = {};
+  CATMAID.THREE.LineSegments2 = function() {
+
+  };
+
+  THREE.Lut.prototype.addColorMap("greenred",
+    [[0.0, '0x6fff5c'], [0.1, '0x00FFFF'], [0.4, '0x85ADFF'],
+     [0.8, '0xFF99FF'], [1.0, '0xFF4F4F']]);
+
+})(CATMAID);
+
+
+/**
+ * Streamsaver.js configuration
+ */
+(function(CATMAID) {
+
+  // We don't want to load these WebWorkers from the StreamSaver.js repo on
+  // GitHub and provide our own copy of these files.
+  streamSaver.mitm = CATMAID.tools.urlJoin(window.origin, CATMAID.makeStaticURL('libs/streamsaver/worker/mitm.html'));
+  streamSaver.ping = CATMAID.tools.urlJoin(window.origin, CATMAID.makeStaticURL('libs/streamsaver/worker/ping.html'));
+
+})(CATMAID);

@@ -135,6 +135,9 @@
     // Start position for the rotation, relative to the target
     var startPosition = camera.position.clone().sub(targetPosition);
 
+    let originalUp = camera.up.clone();
+    let workingUp = new THREE.Vector3();
+
     var m = new THREE.Matrix4();
 
     // Return update function
@@ -146,10 +149,11 @@
       var currentRotation = Math.floor(rad / (2 * Math.PI));
       if (currentRotation !== numRotations) {
         numRotations = currentRotation;
-        // Call notification function, if any
-        if (notify) {
-          notify(currentRotation);
-        }
+      }
+      // Call notification function, if any
+      let promiseNotify;
+      if (notify) {
+        promiseNotify = notify(currentRotation, t);
       }
 
       // In back and forth mode, movement direction is reversed once a full circle
@@ -165,6 +169,12 @@
       // (relative to target), rotating it and make it a world position by adding
       // it to the target.
       camera.position.copy(startPosition).applyMatrix4(m).add(targetPosition);
+      // Prevent Three.js from trying to keep the camera facing up.
+      workingUp.copy(originalUp);
+      workingUp.applyMatrix4(m);
+      camera.up.copy(workingUp);
+
+      return promiseNotify;
     };
   };
 

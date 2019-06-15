@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
+import json
 import os.path
 import shutil
 import tarfile
-import json
-import six
+from typing import Dict, List, Optional
 
 from django.conf import settings
-from django.http import JsonResponse
+from django.core.exceptions import ImproperlyConfigured
+from django.http import HttpRequest, JsonResponse
 from django.db.models import Count
 
 from catmaid.control.authentication import requires_user_role
@@ -68,19 +68,19 @@ class TreenodeExporter:
         self.entity_name = "treenode"
 
         # Output path for this job will be initialized, when needed
-        self.output_path = None
+        self.output_path = None # type: Optional[str]
 
         # Cache for neuron and relation folder names
-        self.skid_to_neuron_folder = {}
-        self.relid_to_rel_folder = {}
+        self.skid_to_neuron_folder = {} # type: Dict
+        self.relid_to_rel_folder = {} # type: Dict
 
         # Get relation map
         self.relation_map = get_relation_to_id_map(job.project_id)
 
         # Store meta data for each node
-        self.metadata = {}
+        self.metadata = {} # type: Dict
 
-    def create_message(self, title, message, url):
+    def create_message(self, title, message, url) -> None:
         msg = Message()
         msg.user = User.objects.get(pk=int(self.job.user.id))
         msg.read = False
@@ -89,7 +89,7 @@ class TreenodeExporter:
         msg.action = url
         msg.save()
 
-    def create_basic_output_path(self):
+    def create_basic_output_path(self) -> None:
         """ Will create a random output folder name prefixed with the entity
         name as well as the actual directory.
         """
@@ -103,7 +103,7 @@ class TreenodeExporter:
         os.makedirs(output_path)
         self.output_path = output_path
 
-    def create_path(self, treenode):
+    def create_path(self, treenode) -> str:
         """ Based on the output path, this function will create a folder
         structure for a particular skeleton. Things that are supposedly
         needed multiple times, will be cached. This function will also make
@@ -123,14 +123,11 @@ class TreenodeExporter:
             self.skid_to_neuron_folder[treenode.skeleton.id] = treenode_path
 
             # Create path output_path/neuron_id
-            try:
+            if not os.path.exists(treenode_path):
                 os.makedirs(treenode_path)
-                return treenode_path
-            except OSError as e:
-                # Everything is fine if the path exists and is writable
-                if not os.path.exists(treenode_path) or not \
-                        os.access(treenode_path, os.W_OK):
-                    raise e
+            if not os.access(treenode_path, os.W_OK):
+                raise ImproperlyConfigured("Treenode export path is not writable")
+            return treenode_path
 
     def get_entities_to_export(self):
         """ Returns a list of treenode links. If the job asks only for a
@@ -149,9 +146,9 @@ class TreenodeExporter:
             return Treenode.objects.filter(project_id=self.job.project_id,
                     skeleton_id__in=self.job.skeleton_ids)
 
-    def export_single_node(self, treenode):
-        """ Exports a treenode and expects the output path to be existing
-        and writable.
+    def export_single_node(self, treenode) -> None:
+        """ Exports a treenode. Expects the output path to exist
+        and be writable.
         """
         # Calculate bounding box for current connector
         x_min = treenode.location_x - self.job.x_radius
@@ -176,7 +173,7 @@ class TreenodeExporter:
             treenode_image_path = os.path.join(output_path, image_name)
             img.write(treenode_image_path)
 
-    def post_process(self, nodes):
+    def post_process(self, nodes) -> None:
         """ Create a meta data file for all the nodes passed (usually all of the
         ones queries before). This file is a table with the following columns:
         <treenode id> <parent id> <#presynaptic sites> <#postsynaptic sites> <x> <y> <z>
@@ -202,7 +199,7 @@ class TreenodeExporter:
 
         # Create log info for each treenode. Each line will contain treenode-id,
         # parent-id, nr. presynaptic sites, nr. postsynaptic sites, x, y, z
-        skid_to_metadata = {}
+        skid_to_metadata = {} # type: Dict
         for n in nodes:
             ls = skid_to_metadata.get(n.skeleton.id)
             if not ls:
@@ -237,7 +234,7 @@ class ConnectorExporter(TreenodeExporter):
         TreenodeExporter.__init__(self, *args, **kwargs)
         self.entity_name = "connector"
 
-    def create_path(self, connector_link):
+    def create_path(self, connector_link) -> str:
         """ Based on the output path, this function will create a folder
         structure for a particular connector. Things that are supposedly
         needed multiple times, will be cached. This function will also make
@@ -265,6 +262,8 @@ class ConnectorExporter(TreenodeExporter):
         relation_folder =  self.relid_to_rel_folder[connector_link.relation_id]
 
         # Create path output_path/neuron_id/relation_name/connector_id
+        if self.output_path is None:
+            raise Exception('self.output_path is not set in ConnectorExporter.create_path()')
         connector_path = os.path.join(self.output_path, neuron_folder,
                 relation_folder, str(connector_link.connector.id))
         try:
@@ -277,7 +276,7 @@ class ConnectorExporter(TreenodeExporter):
 
         return connector_path
 
-    def get_entities_to_export(self):
+    def get_entities_to_export(self) -> List:
         """ Returns a list of connector links. If the job asks only for a
         sample, the first pre-synaptic connector of the first skeleton will be
         used. If such a connector doesn't exist, the first one found is used.
@@ -317,7 +316,7 @@ class ConnectorExporter(TreenodeExporter):
 
         return connector_links
 
-    def export_single_node(self, connector_link):
+    def export_single_node(self, connector_link) -> None:
         """ Exports a single connector and expects the output path to be existing
         and writable.
         """
@@ -350,11 +349,11 @@ class ConnectorExporter(TreenodeExporter):
             connector_image_path = os.path.join(connector_path, image_name)
             img.write(connector_image_path)
 
-    def post_process(self, nodes):
+    def post_process(self, nodes) -> None:
         pass
 
 @task()
-def process_export_job(exporter):
+def process_export_job(exporter) -> str:
     """ This method does the actual archive creation. It controls the data
     extraction and the creation of all sub-stacks. It can be executed as Celery
     task.
@@ -454,7 +453,7 @@ def create_request_based_export_job(request, project_id):
 
     # Get stack ID and  skeleton IDs of which the nodes should be exported
     stack_id = request.POST.get('stackid', None)
-    skeleton_ids = set(int(v) for k,v in six.iteritems(request.POST) \
+    skeleton_ids = set(int(v) for k,v in request.POST.items() \
             if k.startswith('skids['))
     # Width, height and depth of each node image stack needs to be known.
     x_radius = request.POST.get('x_radius', None)
@@ -468,7 +467,7 @@ def create_request_based_export_job(request, project_id):
             x_radius, y_radius, z_radius, sample)
 
 @requires_user_role(UserRole.Browse)
-def export_connectors(request, project_id=None):
+def export_connectors(request:HttpRequest, project_id=None) -> JsonResponse:
     """ This will create a new connector exporting job based on an HTTP request.
     Based on them this method will create and run a new exporting job.
     """
@@ -482,7 +481,7 @@ def export_connectors(request, project_id=None):
     return JsonResponse(json_data)
 
 @requires_user_role(UserRole.Browse)
-def export_treenodes(request, project_id=None):
+def export_treenodes(request:HttpRequest, project_id=None) -> JsonResponse:
     """ This will create a new treenode exporting job based on an HTTP request.
     Based on them this method will create and run a new exporting job.
     """

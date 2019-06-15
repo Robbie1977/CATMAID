@@ -18,6 +18,7 @@
 
       // Add input fields
       this.widgetField = this.dialog.appendField('Widget', 'widget-name', '', true);
+      this.widgetField.setAttribute('autocomplete', 'widget-name');
       // Align input fields better
       $(this.dialog.dialog).find('label').css('width', '5em');
       $(this.dialog.dialog).find('label').css('display', 'inline-block');
@@ -42,6 +43,7 @@
       var self = this;
       var datatable = $(this.widgetNameTable).DataTable({
         dom: 't<ip>',
+        autoWidth: false,
         order: [],
         data: this.availableWidgets,
         language: {
@@ -105,9 +107,9 @@
         // If there is no valid widget with this key, take the first entry from
         // the table.
         if (!widgetIndex[widgetName]) {
-          var firstRow = datatable.row(0, {order: 'applied', search: 'applied'});
-          if (firstRow.length > 0) {
-            widgetName = firstRow.data().key;
+          var visibleRows = datatable.rows({order: 'applied', search: 'applied'}).data();
+          if (visibleRows.length > 0) {
+            widgetName = visibleRows[0].key;
           } else {
             CATMAID.warn("No valid widget selected");
             return;
@@ -137,7 +139,7 @@
      * Displays the widget open dialog.
      */
     OpenWidgetDialog.prototype.show = function() {
-      this.dialog.show('650', '380', true, undefined, this._onresize.bind(this));
+      this.dialog.show('700', '380', true, undefined, this._onresize.bind(this));
 
 			// Allow content to overflow the dialog borders. This is needed for
 			// displaying all annotation autocompletion options.

@@ -1,12 +1,8 @@
 /* -*- mode: espresso; espresso-indent-level: 2; indent-tabs-mode: nil -*- */
 /* vim: set softtabstop=2 shiftwidth=2 tabstop=2 expandtab: */
 
-// Declare the CATMAID namespace
-var CATMAID = {};
-
 // Global request queue
-// TODO: Move into CATMAID namespace
-var requestQueue = new RequestQueue();
+var requestQueue = new CATMAID.RequestQueue();
 
 // Add some basic functionality
 (function(CATMAID) {
@@ -255,10 +251,10 @@ var requestQueue = new RequestQueue();
         CATMAID.getCookie(CATMAID.csrfCookieName, true) :
         undefined;
 
-    window.requestQueue = new RequestQueue(CATMAID.backendURL, csrfCookie);
+    window.requestQueue = new CATMAID.RequestQueue(CATMAID.backendURL, csrfCookie);
     $.ajaxPrefilter(function (options, origOptions, jqXHR) {
       if (0 === options.url.indexOf(CATMAID.backendURL) &&
-          !RequestQueue.csrfSafe(options.type)) {
+          !CATMAID.RequestQueue.csrfSafe(options.type)) {
         jqXHR.setRequestHeader('X-CSRFToken', csrfCookie);
       }
     });
@@ -313,11 +309,19 @@ var requestQueue = new RequestQueue();
   /**
    * Check if the passed in response information seems valid and without errors.
    */
-  CATMAID.validateResponse = function(status, text, xml, responseType) {
+  CATMAID.validateResponse = function(status, text, xml, responseType,
+      additionalStatusCodes) {
     var isTextResponse = !responseType || responseType === '' || responseType === 'text';
     if (status >= 200 && status <= 204 &&
         (!isTextResponse || typeof text === 'string' || text instanceof String)) {
       return text;
+    } else if (additionalStatusCodes && additionalStatusCodes.indexOf(status) > -1) {
+      return text;
+    } else if (status === 502) { // Bad Gateway
+      var error = new CATMAID.NetworkAccessError("CATMAID server unreachable",
+          "Please wait or try to reload");
+      error.statusCode = status;
+      throw error;
     } else {
       var error = new CATMAID.Error("The server returned an unexpected status: " + status);
       error.statusCode = status;
@@ -331,8 +335,8 @@ var requestQueue = new RequestQueue();
    *
    * @returns {Object} parsed resonse text
    */
-  CATMAID.validateJsonResponse = function(status, text, xml) {
-    var response = CATMAID.validateResponse(status, text, xml);
+  CATMAID.validateJsonResponse = function(status, text, xml, additionalStatusCodes) {
+    var response = CATMAID.validateResponse(status, text, xml, undefined, additionalStatusCodes);
     // `text` may be empty for no content responses.
     var json = text.length ? JSON.parse(text) : {};
     if (json.error) {
@@ -355,6 +359,10 @@ var requestQueue = new RequestQueue();
       return new CATMAID.LocationLookupError(error.error, error.detail);
     } else if ('PermissionError' === error.type) {
       return new CATMAID.PermissionError(error.error, error.detail);
+    } else if ('InvalidLoginError' === error.type) {
+      return new CATMAID.InvalidLoginError(error.error, error.detail);
+    } else if ('InactiveLoginError' === error.type) {
+      return new CATMAID.InactiveLoginError(error.error, error.detail, error.meta);
     } else {
       return new CATMAID.Error("Unsuccessful request: " + error.error,
           error.detail, error.type);
@@ -366,6 +374,9 @@ var requestQueue = new RequestQueue();
    * expects a JSON response. A promise is returned. The URL passed in needs to
    * be relative to the back-end URL.
    *
+   * @param relativeURL
+   * @param method
+   * @param data
    * @param {Boolean} raw     (Optional) If truthy, no JSON validation and
    *                          parsing is performed.
    * @param {String}  id      (Optional) An ID for the request, to be able to
@@ -374,29 +385,92 @@ var requestQueue = new RequestQueue();
    *                          is replaced by this one.
    * @param {String}  responseType (Optional) An expected response type for the
    *                               request (e.g. text or blob).
+   * @param {Object}  headers (Optional) If an object, set headers on the request
+   *                          with keys/ values like the object's. These override
+   *                          default headers and the queue's extraHeaders.
+   * @param {API}     api     (Optional) An API that should be contacted instead
+   *                          of the current environment.
+   *
+   * @param {int[]}   supportedStatus (optional) A list of HTTP status code,
+   *                                  that are allowed besied the default.
    */
-  CATMAID.fetch = function(relativeURL, method, data, raw, id, replace, responseType) {
+  CATMAID.fetch = function(relativeURL, method, data, raw, id, replace,
+      responseType, headers, parallel, details, api, supportedStatus) {
+    // Alternatively, accept a single argument that provides all parameters as
+    // fields.
+    let absoluteURL;
+    if (arguments.length === 1 && typeof(arguments[0]) !== "string") {
+      let options = arguments[0];
+      relativeURL = options.relativeURL ? options.relativeURL : options.url;
+      absoluteURL = options.absoluteURL;
+      method = options.method;
+      data = options.data;
+      raw = options.raw;
+      id = options.id;
+      replace = options.replace;
+      responseType = options.responseType;
+      headers = options.headers;
+      parallel = options.parallel;
+      details = options.details;
+      api = options.api;
+      supportedStatus = options.supportedStatus;
+    }
+
+    // If an API instance is provided, relative URLs are replaced with an
+    // absolute URL at the target host and additional request parameters like
+    // API keys and HTTP authentication are added.
+    let url;
+    if (api) {
+      if (api.apiKey && api.apiKey.length > 0) {
+        if (!headers) headers = {};
+        headers['X-Authorization'] = 'Token ' + api.apiKey;
+        headers['X-Requested-With'] = undefined;
+      }
+      // The URL will only be changed if no absolute URL is already provided,
+      // i.e. a relative URL is expected.
+      url = absoluteURL ? absoluteURL : CATMAID.tools.urlJoin(api.url, relativeURL);
+    } else {
+      url = absoluteURL ? absoluteURL : CATMAID.makeURL(relativeURL);
+    }
+
     method = method || 'GET';
     return new Promise(function(resolve, reject) {
-      var url = CATMAID.makeURL(relativeURL);
-      var fn = replace ? requestQueue.replace : requestQueue.register;
-      fn.call(requestQueue, url, method, data, function(status, text, xml) {
+      let queue = parallel ? requestQueue.clone() : requestQueue;
+      var fn = replace ? queue.replace : queue.register;
+      fn.call(requestQueue, url, method, data, function(status, text, xml, dataSize) {
         // Validation throws an error for bad requests and wrong JSON data,
         // which would causes the promise to become rejected automatically if
         // this wasn't an asynchronously called function. But since this is the
         // case, we have to call reject() explicitly.
         try {
           if (raw) {
-            var response = CATMAID.validateResponse(status, text, xml, responseType);
-            resolve(text);
+            var response = CATMAID.validateResponse(status, text, xml,
+                responseType, supportedStatus);
+            if (details) {
+              resolve({
+                data: text,
+                dataSize: dataSize,
+              });
+            } else {
+              resolve(text);
+            }
           } else {
-            var json = CATMAID.validateJsonResponse(status, text, xml);
-            resolve(json);
+            var json = CATMAID.validateJsonResponse(status, text, xml,
+                supportedStatus);
+            if (details) {
+              resolve({
+                data: json,
+                dataSize: dataSize,
+                status: status,
+              });
+            } else {
+              resolve(json);
+            }
           }
         } catch (e) {
           reject(e);
         }
-      }, id, responseType);
+      }, id, responseType, headers);
     });
   };
 
@@ -581,6 +655,22 @@ var requestQueue = new RequestQueue();
       xhr.open('GET', url);
       xhr.send();
     });
+  };
+
+  /**
+   * Merge source fields into key if they appear in defaults, if a default does
+   * not exist in the source, set it optionally to the default.
+   */
+  CATMAID.mergeOptions = function(target, source, defaults, setDefaults) {
+    // Only allow options that are defined in the default option list
+    for (var key in defaults) {
+      if (source.hasOwnProperty(key)) {
+        target[key] = source[key];
+      } else if (setDefaults &&
+          defaults.hasOwnProperty(key)) {
+        target[key] = defaults[key];
+      }
+    }
   };
 
 })(CATMAID);

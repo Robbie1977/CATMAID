@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
+from typing import Dict, Tuple
 
 from django.db import connection
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.core.exceptions import ObjectDoesNotExist
 
 from catmaid import state
@@ -12,12 +12,136 @@ from catmaid.models import UserRole, Project, Relation, Treenode, Connector, \
         TreenodeConnector, ClassInstance
 from catmaid.control.authentication import requires_user_role, can_edit_or_fail
 
+
+LINK_TYPES = [
+    {
+        'name': 'Presynaptic',
+        'type': 'Synaptic',
+        'type_id': 'synaptic-connector',
+        'relation': 'presynaptic_to',
+        'isreciprocal': False,
+        'cardinality': 1,
+        'partner_reference': 'outgoing',
+        'partner_relation': 'postsynaptic_to',
+    }, {
+        'name': 'Postsynaptic',
+        'type': 'Synaptic',
+        'type_id': 'synaptic-connector',
+        'relation': 'postsynaptic_to',
+        'isreciprocal': False,
+        'cardinality': None,
+        'partner_reference': 'incoming',
+        'partner_relation': 'presynaptic_to',
+    }, {
+        'name': 'Abutting',
+        'type': 'Abutting',
+        'type_id': 'abutting-connector',
+        'relation': 'abutting',
+        'isreciprocal': True,
+        'cardinality': None,
+        'partner_reference': 'abutting',
+        'partner_relation': 'abutting',
+    }, {
+        'name': 'Gap junction',
+        'type': 'Gap junction',
+        'type_id': 'gapjunction-connector',
+        'relation': 'gapjunction_with',
+        'isreciprocal': True,
+        'cardinality': 2,
+        'partner_reference': 'gapjunction',
+        'partner_relation': 'gapjunction_with',
+    }, {
+        'name': 'Tight junction',
+        'type': 'Tight junction',
+        'type_id': 'tightjunction-connector',
+        'relation': 'tightjunction_with',
+        'isreciprocal': True,
+        'cardinality': 2,
+        'partner_reference': 'tightjunction',
+        'partner_relation': 'tightjunction_with',
+    }, {
+        'name': 'Desmosome',
+        'type': 'Desmosome',
+        'type_id': 'desmosome-connector',
+        'relation': 'desmosome_with',
+        'isreciprocal': True,
+        'cardinality': 2,
+        'partner_reference': 'desmosome',
+        'partner_relation': 'desmosome_with',
+    }, {
+        'name': 'Attachment',
+        'type': 'Attachment',
+        'type_id': 'attachment-connector',
+        'relation': 'attached_to',
+        'isreciprocal': False,
+        'cardinality': None,
+        'partner_reference': 'attachment',
+        'partner_relation': 'close_to',
+    }, {
+        'name': 'Close to',
+        'type': 'Spatial',
+        'type_id': 'spatial-connector',
+        'relation': 'close_to',
+        'isreciprocal': True,
+        'cardinality': None,
+        'partner_reference': 'close_object',
+        'partner_relation': 'close_to',
+    },
+]
+
+
+KNOWN_LINK_PAIRS = {
+    'synaptic-connector': {
+        'source': 'presynaptic_to',
+        'target': 'postsynaptic_to'
+    },
+    'abutting-connector': {
+        'source': 'abutting',
+        'target': 'abutting'
+    },
+    'gapjunction-connector': {
+        'source': 'gapjunction_with',
+        'target': 'gapjunction_with'
+    },
+    'tightjunction-connector': {
+        'source': 'tightjunction_with',
+        'target': 'tightjunction_with',
+    },
+    'desmosome-connector': {
+        'source': 'desmosome_with',
+        'target': 'desmosome_with',
+    },
+    'attachment-connector': {
+        'source': 'attached_to',
+        'target': 'close_to'
+    },
+    'spatial-connector': {
+        'source': 'attached_to',
+        'target': 'close_to'
+    },
+}
+
+
+LINK_RELATION_NAMES = [r['relation'] for r in LINK_TYPES]
+
+
+UNDIRECTED_LINK_TYPES =[p['relation'] for p in LINK_TYPES if p['isreciprocal']]
+
+
+UNDIRECTED_BINARY_LINK_TYPES =[p['relation'] for p in LINK_TYPES
+            if p['isreciprocal'] and p.get('cardinality', None) == 2]
+
+
+LINKS_BY_RELATION = {l['relation']:l for l in LINK_TYPES} # type: Dict
+
+
 @requires_user_role(UserRole.Annotate)
-def create_link(request, project_id=None):
+def create_link(request:HttpRequest, project_id=None) -> JsonResponse:
     """ Create a link between a connector and a treenode
 
     Currently the following link types (relations) are supported:
-    presynaptic_to, postsynaptic_to, abutting, gapjunction_with.
+    presynaptic_to, postsynaptic_to, abutting, gapjunction_with,
+    tightjunction_with, desmosome_with.
     """
     from_id = int(request.POST.get('from_id', 0))
     to_id = int(request.POST.get('to_id', 0))
@@ -78,14 +202,15 @@ def create_link(request, project_id=None):
         if (gapjunction_links.count() != 0):
             return JsonResponse({'error': 'Connector %s cannot have both a gap junction and a postsynaptic node.' % to_id})
 
-    if link_type == 'gapjunction_with':
+    if link_type in UNDIRECTED_BINARY_LINK_TYPES:
         # Enforce only two gap junction links
-        gapjunction_links = TreenodeConnector.objects.filter(project=project, connector=to_connector, relation=relation)
+        undirected_links = TreenodeConnector.objects.filter(project=project, connector=to_connector, relation=relation)
         synapse_links = TreenodeConnector.objects.filter(project=project, connector=to_connector, relation__relation_name__endswith='synaptic_to')
-        if (gapjunction_links.count() > 1):
-            return JsonResponse({'error': 'Connector %s can only have two gap junction connections.' % to_id})
+        name = LINKS_BY_RELATION[link_type]['name'].lower();
+        if (undirected_links.count() > 1):
+            return JsonResponse({'error': 'Connector {} can only have two {} connections.'.format(to_id, name)})
         if (synapse_links.count() != 0):
-            return JsonResponse({'error': 'Connector %s is part of a synapse, and gap junction can not be added.' % to_id})
+            return JsonResponse({'error': 'Connector {} is part of a synapse, and {} can not be added.'.format(to_id, name)})
 
     link = TreenodeConnector(
         user=request.user,
@@ -105,7 +230,7 @@ def create_link(request, project_id=None):
 
 
 @requires_user_role(UserRole.Annotate)
-def delete_link(request, project_id=None):
+def delete_link(request:HttpRequest, project_id=None) -> JsonResponse:
     connector_id = int(request.POST.get('connector_id', 0))
     treenode_id = int(request.POST.get('treenode_id', 0))
 
@@ -140,7 +265,7 @@ def delete_link(request, project_id=None):
 
 def create_connector_link(project_id, user_id, treenode_id, skeleton_id,
         links, cursor=None):
-    """Create new connector links for the passded in treenode. What relation and
+    """Create new connector links for the passed in treenode. What relation and
     confidence is used to which connector is specified in the "links"
     paremteter. A list of three-element lists, following the following format:
     [<connector-id>, <relation-id>, <confidence>]
@@ -169,12 +294,12 @@ def create_connector_link(project_id, user_id, treenode_id, skeleton_id,
     return cursor.fetchall()
 
 def create_treenode_links(project_id, user_id, connector_id, links, cursor=None):
-    """Create new connector links for the passded in treenode. What relation and
+    """Create new connector links for the passed in treenode. What relation and
     confidence is used to which connector is specified in the "links"
     paremteter. A list of three-element lists, following the following format:
     [<treenode-id>, <relation-id>, <confidence>]
     """
-    def make_row(l):
+    def make_row(l) -> Tuple:
         # Passed in links are expected to follow this format:
         # [<connector-id>, <relation-id>, <confidence>]
         if 3 != len(l):

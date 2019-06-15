@@ -2,7 +2,6 @@
 /* vim: set softtabstop=2 shiftwidth=2 tabstop=2 expandtab: */
 /* global
  CATMAID,
- django_url,
  Stack,
  */
 
@@ -26,20 +25,95 @@
     return dir;
   };
 
+  CATMAID.TileSources = {};
+
+  CATMAID.TileSources.getTypeConstructor = function (tileSourceType) {
+    // Map tile source types to corresponding constructors. This could also be
+    // represented as an array, but is this way more clear and readable.
+    var tileSources = {
+      '1': CATMAID.DefaultTileSource,
+      '2': CATMAID.RequestTileSource,
+      '3': CATMAID.HDF5TileSource,
+      '4': CATMAID.BackslashTileSource,
+      '5': CATMAID.LargeDataTileSource,
+      '6': CATMAID.DVIDImageblkTileSource,
+      '7': CATMAID.RenderServTileSource,
+      '8': CATMAID.DVIDImagetileTileSource,
+      '9': CATMAID.FlixServerTileSource,
+      '10': CATMAID.H2N5TileSource,
+      '11': CATMAID.N5ImageBlockSource,
+      '12': CATMAID.BossTileSource,
+    };
+
+    return tileSources[tileSourceType];
+  };
+
+  CATMAID.TileSources.typeIsImageBlockSource = function (tileSourceType) {
+    return CATMAID.TileSources.getTypeConstructor(tileSourceType).prototype
+        instanceof CATMAID.AbstractImageBlockSource;
+  };
+
   /**
-   * Create a canary tile URL for a particular project/stack/tileSource
+   * Creates a new tile source, based on a source type.
+   */
+  CATMAID.TileSources.get = function(
+      id, tileSourceType, baseURL, fileExtension, tileWidth, tileHeight) {
+    let TileSource = CATMAID.TileSources.getTypeConstructor(tileSourceType);
+
+    if (TileSource) {
+      var source = new TileSource(id, baseURL, fileExtension, tileWidth, tileHeight);
+      source.tileWidth = tileWidth;
+      source.tileHeight = tileHeight;
+      return source;
+    } else throw new RangeError('Tile source type ' + tileSourceType + ' is unknown.');
+  };
+
+
+  CATMAID.AbstractTileSource = function (id, baseURL, fileExtension, tileWidth, tileHeight) {
+    this.id = id;
+    this.baseURL = baseURL;
+    this.fileExtension = fileExtension;
+    this.tileWidth = tileWidth;
+    this.tileHeight = tileHeight;
+    this.transposeTiles = new Set();
+  };
+
+  CATMAID.AbstractTileSource.prototype.constructor = CATMAID.AbstractTileSource;
+
+  /**
+   * Return the URL of a single tile, defined by it grid position
+   * (x, y), ...
+   */
+  CATMAID.AbstractTileSource.prototype.getTileURL = function (
+      project, stack, slicePixelPosition, col, row, zoomLevel) {
+    throw new CATMAID.NotImplementedError();
+  };
+
+  CATMAID.AbstractTileSource.prototype.getOverviewLayer = function (layer) {
+    return new CATMAID.ArtificialOverviewLayer(layer);
+  };
+
+  CATMAID.AbstractTileSource.prototype.getSettings = function () {
+    return this.settings || [];
+  };
+
+  CATMAID.AbstractTileSource.prototype.setSetting = function (name, value) {
+    this[name] = value;
+  };
+
+  /**
+   * Create a canary tile URL for a particular project/stack
    * combination.
    *
    * @param  {Project} project
    * @param  {Stack}   stack
-   * @param  {Object}  tileSource
    * @return {String}  A complete canary tile URL
    */
-  CATMAID.getTileSourceCanaryUrl = function (project, stack, tileSource) {
+  CATMAID.AbstractTileSource.prototype.getCanaryUrl = function (project, stack) {
     var canaryLocation = stack.canaryLocation;
-    var col = Math.floor(canaryLocation.x / tileSource.tileWidth);
-    var row = Math.floor(canaryLocation.y / tileSource.tileHeight);
-    return tileSource.getTileURL(project, stack, [canaryLocation.z], col, row, 0);
+    var col = Math.floor(canaryLocation.x / this.tileWidth);
+    var row = Math.floor(canaryLocation.y / this.tileHeight);
+    return this.getTileURL(project, stack, [canaryLocation.z], col, row, 0);
   };
 
   /**
@@ -49,13 +123,12 @@
    *
    * @param  {Project} project
    * @param  {Stack}   stack
-   * @param  {Object}  tileSource
    * @param  {Boolean} noCache    Prevent caching by appending a dummy request parameter
    * @return {Object}             Object with boolean keys normal and cors as
    *                              well as float keys normalTime and corsTime.
    */
-  CATMAID.checkTileSourceCanary = function (project, stack, tileSource, noCache) {
-    var url = CATMAID.getTileSourceCanaryUrl(project, stack, tileSource);
+  CATMAID.AbstractTileSource.prototype.checkCanary = function (project, stack, noCache) {
+    var url = this.getCanaryUrl(project, stack);
 
     if (noCache) {
       url += "?nocache=" + Date.now();
@@ -76,7 +149,11 @@
     });
 
     var beforeCorsLoad = performance.now();
-    var corsReq = fetch(new Request(url, {mode: 'cors', credentials: 'same-origin'}))
+    var corsReq = new Request(url, {
+        mode: 'cors',
+        credentials: 'same-origin',
+        headers: this.getRequestHeaders()});
+    corsReq = fetch(corsReq)
       .then(function (response) {
         var contentHeader = response.headers.get('Content-Type');
         return [contentHeader && contentHeader.startsWith('image'),
@@ -94,66 +171,9 @@
     });
   };
 
-  /**
-   * Creates a new tile source, based on a source type.
-   */
-  CATMAID.getTileSource = function(tileSourceType, baseURL, fileExtension, tileWidth, tileHeight) {
-    // Map tile source types to corresponding constructors. This could also be
-    // represented as an array, but is this way more clear and readable.
-    var tileSources = {
-      '1': CATMAID.DefaultTileSource,
-      '2': CATMAID.RequestTileSource,
-      '3': CATMAID.HDF5TileSource,
-      '4': CATMAID.BackslashTileSource,
-      '5': CATMAID.LargeDataTileSource,
-      '6': CATMAID.DVIDImageblkTileSource,
-      '7': CATMAID.RenderServTileSource,
-      '8': CATMAID.DVIDImagetileTileSource,
-      '9': CATMAID.FlixServerTileSource,
-      '10': CATMAID.H2N5TileSource
-    };
-
-    var TileSource = tileSources[tileSourceType];
-    if (TileSource) {
-      var source = new TileSource(baseURL, fileExtension, tileWidth, tileHeight);
-      source.tileWidth = tileWidth;
-      source.tileHeight = tileHeight;
-      return source;
-    } else throw new RangeError('Tile source type ' + tileSourceType + ' is unknown.');
+  CATMAID.AbstractTileSource.prototype.getRequestHeaders = function () {
+    return {};
   };
-
-
-  CATMAID.AbstractTileSource = function (baseURL, fileExtension, tileWidth, tileHeight) {
-    this.baseURL = baseURL;
-    this.fileExtension = fileExtension;
-    this.tileWidth = tileWidth;
-    this.tileHeight = tileHeight;
-    this.transposeTiles = new Set();
-  };
-
-  CATMAID.AbstractTileSource.prototype.constructor = CATMAID.AbstractTileSource;
-
-  /**
-   * Return the URL of a single tile, defined by it grid position
-   * (x, y), ...
-   */
-  CATMAID.AbstractTileSource.prototype.getTileURL = function (
-      project, stack, slicePixelPosition, col, row, zoomLevel) {
-    throw new CATMAID.Error('Not implemented');
-  };
-
-  CATMAID.AbstractTileSource.prototype.getOverviewLayer = function (layer) {
-    return new CATMAID.ArtificialOverviewLayer(layer);
-  };
-
-  CATMAID.AbstractTileSource.prototype.getSettings = function () {
-    return this.settings || [];
-  };
-
-  CATMAID.AbstractTileSource.prototype.setSetting = function (name, value) {
-    this[name] = value;
-  };
-
 
   CATMAID.AbstractTileSourceWithOverview = function () {
     CATMAID.AbstractTileSource.apply(this, arguments);
@@ -162,7 +182,7 @@
   CATMAID.AbstractTileSourceWithOverview.prototype = Object.create(CATMAID.AbstractTileSource.prototype);
 
   CATMAID.AbstractTileSourceWithOverview.prototype.getOverviewURL = function (stack, slicePixelPosition) {
-    throw new CATMAID.Error('Not implemented');
+    throw new CATMAID.NotImplementedError();
   };
 
   CATMAID.AbstractTileSourceWithOverview.prototype.getOverviewLayer = function (layer) {
@@ -234,7 +254,7 @@
 
   CATMAID.HDF5TileSource.prototype.getTileURL = function (
       project, stack, slicePixelPosition, col, row, zoomLevel) {
-    return django_url + project.id + '/stack/' + stack.id + '/tile?' +
+    return CATMAID.makeURL(project.id + '/stack/' + stack.id + '/tile?' +
         $.param({
           x: col * this.tileWidth,
           y: row * this.tileHeight,
@@ -247,7 +267,7 @@
           file_extension: this.fileExtension,
           basename: this.baseURL,
           type:'all'
-        });
+        }));
   };
 
 
@@ -415,7 +435,7 @@
    *
    * Source type: 9
    */
-  CATMAID.FlixServerTileSource = function(baseURL, fileExtension, tileWidth, tileHeight) {
+  CATMAID.FlixServerTileSource = function() {
     CATMAID.AbstractTileSource.apply(this, arguments);
 
     this.color = null;
@@ -497,6 +517,245 @@
       .replace('%AXIS_1%', row * this.tileHeight)
       .replace('%AXIS_2%', slicePixelPosition[0])
       + '.' + this.fileExtension;
+  };
+
+
+  CATMAID.AbstractImageBlockSource = class AbstractImageBlockSource
+      extends CATMAID.AbstractTileSource {
+
+    blockSize(zoomLevel) {
+      throw new CATMAID.NotImplementedError();
+    }
+
+    dataType() {
+      throw new CATMAID.NotImplementedError();
+    }
+
+    readBlock(zoomLevel, xi, yi, zi) {
+      throw new CATMAID.NotImplementedError();
+    }
+  };
+
+
+  /**
+   * Image block source type for N5 datasets.
+   * See https://github.com/saalfeldlab/n5
+   * See https://github.com/aschampion/n5-wasm
+   *
+   * Source type: 11
+   */
+  CATMAID.N5ImageBlockSource = class N5ImageBlockSource extends CATMAID.AbstractImageBlockSource {
+    constructor(...args) {
+      super(...args);
+
+      function supportsDynamicImport() {
+        try {
+          new Function('import("")');
+          return true;
+        } catch (err) {
+          return false;
+        }
+      }
+
+      if (!supportsDynamicImport() || typeof BigInt === 'undefined') {
+        // TODO: should fail gracefully here instead.
+        throw new CATMAID.Error(
+          'Your browser does not support features required for N5 mirrors');
+      }
+
+      this.hasScaleLevels = this.baseURL.includes('%SCALE_DATASET%');
+      this.datasetURL = this.baseURL.substring(0, this.baseURL.lastIndexOf('/'));
+      let sliceDims = this.baseURL.substring(this.baseURL.lastIndexOf('/') + 1);
+      this.sliceDims = sliceDims.split('_').map(d => parseInt(d, 10));
+      this.reciprocalSliceDims = Array.from(Array(this.sliceDims.length).keys())
+          .sort((a, b) => this.sliceDims[a] - this.sliceDims[b]);
+      let n5DirIndex = this.datasetURL.lastIndexOf('.n5');
+      this.rootURL = n5DirIndex === -1 ?
+          (new URL(this.datasetURL)).origin :
+          this.datasetURL.substring(0, n5DirIndex + 3);
+      this.datasetPathFormat = this.datasetURL.substring(this.rootURL.length + 1);
+
+      this.datasetAttributes = [];
+      this.promiseReady = N5ImageBlockSource.loadN5()
+          .then(n5wasm => n5wasm.N5HTTPFetch.open(this.rootURL).then(r => this.reader = r))
+          .then(() => this.populateDatasetAttributes());
+      this.ready = false;
+    }
+
+    static loadN5() {
+      // Store a static promise for loading the N5 wasm module to prevent
+      // reloading for multiple stacks and to prevent strange wasm panics when
+      // loading multiple times.
+      if (!this.promiseN5wasm) {
+        // This is done inside a Function/eval so that Firefox does not fail
+        // to parse this whole file because of the dynamic import.
+        this.promiseN5wasm = (new Function("return import('../libs/n5-wasm/n5_wasm.js')"))()
+            .then(n5wasm => n5wasm
+                .default(CATMAID.makeStaticURL('libs/n5-wasm/n5_wasm_bg.wasm'))
+                .then(() => n5wasm));
+      }
+
+      return this.promiseN5wasm;
+    }
+
+    getTileURL(project, stack, slicePixelPosition, col, row, zoomLevel) {
+      let z = slicePixelPosition[0] / this.blockSize(zoomLevel)[2];
+      let sourceCoord = [col, row, z];
+      let blockCoord = CATMAID.tools.permute(sourceCoord, this.reciprocalSliceDims);
+
+      return this.rootURL + '/' + this.datasetPath(zoomLevel) + '/' + blockCoord.join('/');
+    }
+
+    populateDatasetAttributes(zoomLevel = 0) {
+      let datasetPath = this.datasetPath(zoomLevel);
+      return this.reader
+          .dataset_exists(datasetPath)
+          .then(exists => {
+            if (exists) {
+              return this.reader.get_dataset_attributes(datasetPath)
+                  .then(dataAttrs => this.datasetAttributes[zoomLevel] = dataAttrs)
+                  .then(() => {
+                    if (this.hasScaleLevels) {
+                      return this.populateDatasetAttributes(zoomLevel + 1);
+                    }
+                  });
+            }
+          })
+          .then(() => this.ready = true);
+    }
+
+    blockSize(zoomLevel) {
+      if (!this.ready) return [
+        this.tileWidth,
+        this.tileHeight,
+        1
+      ];
+      let bs = this.datasetAttributes[zoomLevel].get_block_size();
+      return CATMAID.tools.permute(bs, this.sliceDims);
+    }
+
+    dataType () {
+      return this.ready ?
+          this.datasetAttributes[0].get_data_type().toLowerCase() :
+          undefined;
+    }
+
+    readBlock(zoomLevel, ...sourceCoord) {
+      return this.promiseReady.then(() => {
+        let path = this.datasetPath(zoomLevel);
+        let dataAttrs = this.datasetAttributes[zoomLevel];
+
+        let blockCoord = CATMAID.tools.permute(sourceCoord, this.reciprocalSliceDims);
+
+        return this.reader
+            .read_block_with_etag(path, dataAttrs, blockCoord.map(BigInt))
+            .then(block => {
+              if (block) {
+                let etag = block.get_etag();
+                let size = block.get_size();
+                let n = 1;
+                let stride = size.map(s => { let rn = n; n *= s; return rn; });
+                return {
+                  etag,
+                  block: new nj.NdArray(nj.ndarray(block.into_data(), size, stride))
+                      .transpose(...this.sliceDims)
+                };
+              } else {
+                return {block, etag: undefined};
+              }
+            });
+      });
+    }
+
+    datasetPath(zoomLevel) {
+      return this.datasetPathFormat
+          .replace('%SCALE_DATASET%', this.scaleLevelPath(zoomLevel));
+    }
+
+    scaleLevelPath(zoomLevel) {
+      return 's' + zoomLevel;
+    }
+
+    checkCanary(project, stack, noCache) {
+      let request = (options) => {
+        let url = this.getCanaryUrl(project, stack);
+
+        if (noCache) {
+          url += "?nocache=" + Date.now();
+        }
+
+        let before = performance.now();
+        return fetch(new Request(url, options))
+          .then((response) => {
+            var contentHeader = response.headers.get('Content-Type');
+            return [contentHeader && contentHeader.startsWith('application/octet-stream'),
+                performance.now() - before];
+          })
+          .catch(() => [false, Infinity]);
+      };
+
+      return this.promiseReady.then(() => Promise.all([
+          request(),
+          request({mode: 'cors', credentials: 'same-origin'})
+      ]).then(result => ({
+          normal:     result[0][0],
+          normalTime: result[0][1],
+          cors:       result[1][0],
+          corsTime:   result[1][1]
+      })));
+    }
+  };
+
+  /**
+   * Tile source for Boss tiles.
+   *
+   * See https://docs.theboss.io/docs/image
+   *
+   * https://api.theboss.io/v1/tile/:collection/:experiment/:channel/:orientation/:tile_size/:resolution/:x_idx/:y_idx/:z_idx/:t_idx/
+   *
+   * Tile source: 10
+   */
+  CATMAID.BossTileSource = function () {
+    CATMAID.AbstractTileSource.apply(this, arguments);
+
+    if (this.tileWidth !== this.tileHeight)
+      throw new CATMAID.ValueError('Tile width and height must be equal for Boss tile sources!');
+
+    this.authToken = '';
+    this.headers = {};
+  };
+
+  CATMAID.BossTileSource.prototype = Object.create(CATMAID.AbstractTileSource.prototype);
+
+  CATMAID.BossTileSource.prototype.getTileURL = function (
+      project, stack, slicePixelPosition, col, row, zoomLevel) {
+    if (stack.orientation === CATMAID.Stack.ORIENTATION_XY) {
+      return this.baseURL + 'xy/' + this.tileWidth + '/' + zoomLevel + '/' + col + '/' + row + '/' + slicePixelPosition[0];
+    } else if (stack.orientation === CATMAID.Stack.ORIENTATION_XZ) {
+      return this.baseURL + 'xz/' + this.tileWidth + '/' + zoomLevel + '/' + col + '/' + slicePixelPosition[0] + '/' + row ;
+    } else if (stack.orientation === CATMAID.Stack.ORIENTATION_ZY) {
+      return this.baseURL + 'yz/' + this.tileWidth + '/' + zoomLevel + '/' + col + '/' + row + '/' + slicePixelPosition[0];
+    }
+  };
+
+  CATMAID.BossTileSource.prototype.getSettings = function () {
+    return [
+        {name: 'authToken', displayName: 'Boss auth token', type: 'text', value: this.authToken,
+          help: 'TODO'},
+      ];
+  };
+
+  CATMAID.BossTileSource.prototype.setSetting = function () {
+    CATMAID.AbstractTileSource.prototype.setSetting.apply(this, arguments);
+    this._buildRequestHeaders();
+  };
+
+  CATMAID.BossTileSource.prototype._buildRequestHeaders = function () {
+    this.headers = {'Authorization': 'Token ' + this.authToken};
+  };
+
+  CATMAID.BossTileSource.prototype.getRequestHeaders = function () {
+    return this.headers;
   };
 
 

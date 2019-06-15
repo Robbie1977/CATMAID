@@ -266,7 +266,8 @@
    * Create buffer objects for all passed in object/material combinations. This
    * is more performant for larger numbers of nodes.
    */
-  MultiObjectBufferGeometry.prototype.createAll = function(objects, scaling, filter, handler) {
+  MultiObjectBufferGeometry.prototype.createAll = function(objects, scaling, visibility, filter, handler) {
+    visibility = visibility === undefined ? 1.0 : (visibility ? 1.0 : 0);
     filter = filter || returnTrue;
     handler = handler || CATMAID.noop;
 
@@ -330,7 +331,7 @@
         colors[vIndex + 1] = color.g;
         colors[vIndex + 2] = color.b;
 
-        visible[objectStart + j] = 1.0;
+        visible[objectStart + j] = visibility;
         alphas[objectStart + j] = alpha;
       }
 
@@ -492,7 +493,7 @@
    *                                  line property initialization.
    */
   MultiObjectInstancedBufferGeometry.prototype.createMaterial = function(
-      type, templateMaterial) {
+      type, templateMaterial, extraOptions = {}) {
     type = type || 'lambert';
     var material;
     if ('lambert' === type) {
@@ -501,10 +502,11 @@
       material = new CATMAID.ShaderMeshBasicMaterial(templateMaterial);
     }
 
-    // Needed for buffer geometry shader modifications
-    material.transparent = true;
-    material.depthTest = true;
-    material.depthWrite = false;
+    // The defaults are needed for buffer geometry shader modifications
+    material.transparent = extraOptions.transparent || true;
+    material.depthTest = extraOptions.depthTest || true;
+    material.depthWrite = extraOptions.depthWrite || false;
+    material.side = extraOptions.side || THREE.FrontSide;
 
     // Install snippets
     // Warning: morphing doesn't work with current THREE.js version, because
@@ -543,7 +545,8 @@
    * Create buffer objects for all passed in object/material combinations. This
    * is more performant for larger numbers of nodes.
    */
-  MultiObjectInstancedBufferGeometry.prototype.createAll = function(objects, scaling, filter, handler) {
+  MultiObjectInstancedBufferGeometry.prototype.createAll = function(objects, scaling, visibility, filter, handler) {
+    visibility = visibility === undefined ? 1.0 : (visibility ? 1.0 : 0);
     filter = filter || returnTrue;
     handler = handler || CATMAID.noop;
 
@@ -585,7 +588,7 @@
       colors[oIndex + 1] = color.g;
       colors[oIndex + 2] = color.b;
 
-      visible[addedObjects] = 1.0;
+      visible[addedObjects] = visibility;
       alphas[addedObjects] = alpha;
 
       ++addedObjects;

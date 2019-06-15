@@ -1,4 +1,3 @@
-from __future__ import absolute_import
 # If you don't have settings.py in this directory, you should copy
 # this file to settings.py and customize it.
 
@@ -7,13 +6,13 @@ import hashlib
 
 DATABASES = {
     'default': {
-        'ENGINE': 'custom_postgresql_psycopg2', # Add 'postgresql_psycopg2', 'postgresql', 'mysql', 'sqlite3' or 'oracle'.
+        'ENGINE': 'custom_postgresql_psycopg2',
         'ATOMIC_REQUESTS': True,              # Wrap every request in a transaction
-        'NAME': 'CATMAID_DATABASE_NAME',      # Or path to database file if using sqlite3.
-        'USER': 'CATMAID_DATABASE_USERNAME',  # Not used with sqlite3.
-        'PASSWORD': 'CATMAID_DATABASE_PASSWORD',  # Not used with sqlite3.
-        'HOST': 'CATMAID_DATABASE_HOST',      # Set to empty string for localhost. Not used with sqlite3.
-        'PORT': 'CATMAID_DATABASE_PORT',      # Set to empty string for default. Not used with sqlite3.
+        'NAME': 'CATMAID_DATABASE_NAME',
+        'USER': 'CATMAID_DATABASE_USERNAME',
+        'PASSWORD': 'CATMAID_DATABASE_PASSWORD',
+        'HOST': 'CATMAID_DATABASE_HOST',      # Set to empty string for localhost.
+        'PORT': 'CATMAID_DATABASE_PORT',      # Set to empty string for default.
     }
 }
 
@@ -42,7 +41,7 @@ MEDIA_URL = '/CATMAID_SUBDIR/files/'
 # The URL where static files can be accessed, relative to the domain's root
 STATIC_URL = '/CATMAID_SUBDIR/static/'
 # The absolute local path where the static files get collected to
-STATIC_ROOT =  'CATMAIDPATH/django/static'
+STATIC_ROOT = 'CATMAIDPATH/django/static'
 
 # Local time zone for this installation. Choices can be found here:
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
@@ -92,7 +91,7 @@ IMPORTER_DEFAULT_IMAGE_BASE = 'http://CATMAID_SERVERNAME/CATMAID_SUBDIR/data'
 # The URL under which custom front-end code can be made available
 STATIC_EXTENSION_URL = '/CATMAID_SUBDIR/staticext/'
 # The absolute local path where the static extension files live
-STATIC_EXTENSION_ROOT =  'CATMAIDPATH/django/staticext'
+STATIC_EXTENSION_ROOT = 'CATMAIDPATH/django/staticext'
 
 # Gives Django access to installed CATMAID extensions - do not change without good reason.
 # See https://catmaid.readthedocs.io/en/stable/extensions.html for more details

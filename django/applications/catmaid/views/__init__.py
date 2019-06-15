@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 from django.urls import reverse
 from django.conf import settings
@@ -113,10 +112,10 @@ class GroupMembershipHelper(TemplateView):
             group, _ = Group.objects.get_or_create(name=user.username)
             if 'add' == action:
                 group.user_set.add(*source_users)
-                ++updated
+                updated += 1
             elif 'revoke' == action:
                 group.user_set.remove(*source_users)
-                ++updated
+                updated += 1
 
         messages.success(request, 'Successfully updated {} permissions'.format(updated))
         return HttpResponseRedirect(redirect_url)

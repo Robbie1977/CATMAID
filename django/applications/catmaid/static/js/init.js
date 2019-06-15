@@ -60,6 +60,11 @@ var project;
    */
   var project_menu;
   /**
+   * A menu showing available layouts.
+   * @type {Menu}
+   */
+  var layout_menu;
+  /**
    * A menu for all stacks in the current project.
    * @type {Menu}
    */
@@ -98,6 +103,8 @@ var project;
    * CATMAID's web front-end.
    */
   var Client = function(options) {
+    let self = this;
+
     // Lazy load images in container with ID "content" and class "lazy".
     this.blazy = new Blazy({
       selector: ".lazy",
@@ -112,6 +119,24 @@ var project;
     // Currently visible projects
     this.projects = null;
 
+    // The spinner icon in the top right corner
+    this._spinner = null;
+    // The context help icon in the top right corner
+    this._contextHelpButton = null;
+    // The context help container
+    this._contextHelp = document.createElement('div');
+    this._contextHelp.setAttribute('id', 'context-help');
+    this._contextHelp.addEventListener('click', function(e) {
+      // Close context help on click on close
+      if (e.target.closest('.close-box')) {
+        self.setContextHelpVisibility(false);
+      }
+    });
+
+    this.showContextHelp = false;
+    // Indicates if help visibility is defined through URL.
+    this.contextHelpVisibilityEnforced = false;
+
     // Timeout reference for message updates if no websockets are available
     this._messageTimeout = undefined;
 
@@ -123,6 +148,22 @@ var project;
 
     // Do periodic update checks
     window.setTimeout(CATMAID.Init.checkVersion, CATMAID.Init.CHECK_VERSION_TIMEOUT_INTERVAL);
+
+    CATMAID.Layout.on(CATMAID.Layout.EVENT_USER_LAYOUT_CHANGED, function () {
+      updateLayoutMenu();
+    });
+
+    CATMAID.Project.on(CATMAID.Project.EVENT_TOOL_CHANGED,
+        this._handleProjectToolChange, this);
+    CATMAID.Project.on(CATMAID.Project.EVENT_PROJECT_DESTROYED,
+        this._handleProjectDestroyed, this);
+
+    // Show and hide a spinner icon in the top right corner during active
+    // requests.
+    CATMAID.RequestQueue.on(CATMAID.RequestQueue.EVENT_REQUEST_STARTED,
+        this._handleRequestStart, this);
+    CATMAID.RequestQueue.on(CATMAID.RequestQueue.EVENT_REQUEST_ENDED,
+        this._handleRequestEnd, this);
 
     this.init(options);
   };
@@ -143,11 +184,26 @@ var project;
         },
         confirm_project_closing: {
           default: true
-        }
+        },
+        binary_data_transfer: {
+          default: true
+        },
+        context_help_visibility: {
+          default: false
+        },
+        use_file_export_streams: {
+          default: false
+        },
+        // Expect objects with the fields: id, name, url, api_key,
+        // http_auth_user, http_auth_pass.
+        remote_catmaid_instances: {
+          default: []
+        },
       }
     });
 
   CATMAID.Init.on(CATMAID.Init.EVENT_PROJECT_CHANGED, function () {
+    // Load user settings
     CATMAID.Client.Settings
         .load()
         .then(function () {
@@ -169,8 +225,21 @@ var project;
               configurable: true,
             },
           });
+
+          CATMAID.client.updateContextHelp();
+          // Show context help if configured for this project or if enforced
+          // through first URL open.
+          if (CATMAID.client.contextHelpVisibilityEnforced) {
+            CATMAID.client.setContextHelpVisibility(CATMAID.client.showContextHelp);
+          } else {
+            CATMAID.client.setContextHelpVisibility(CATMAID.Client.Settings.session.context_help_visibility);
+          }
+          // This should only applied the first time.
+          CATMAID.client.contextHelpVisibilityEnforced = false;
         });
   });
+
+
 
   // The front end's root window. This should eventually become part of Client,
   // it is already initialized by it.
@@ -196,6 +265,7 @@ var project;
     var init_active_skeleton_id;
     var singleStackViewer = false;
     var initialDataviewId = null;
+    var help;
 
     var account;
     var password;
@@ -214,6 +284,12 @@ var project;
       if ( isNaN( s ) ) s = undefined;
       if ( options[ "active_skeleton_id" ] ) init_active_skeleton_id = parseInt( options[ "active_skeleton_id" ] );
       if ( options[ "active_node_id" ] ) init_active_node_id = parseInt( options[ "active_node_id" ] );
+
+      if ( options.hasOwnProperty("help") ) help = options["help"] !== "false";
+      if (help !== undefined) {
+        this.setContextHelpVisibility(help);
+        this.contextHelpVisibilityEnforced = true;
+      }
 
       if ( !(
           typeof z == "undefined" ||
@@ -288,11 +364,16 @@ var project;
     document.body.appendChild( CATMAID.statusBar.getView() );
 
     var a_url = document.getElementById( "a_url" );
-    a_url.onmouseover = function( e )
+    a_url.onpointerover = function( e )
     {
       this.href = project.createURL();
       return true;
     };
+
+    $(document.body).on('click', 'a[data-role=url-to-clipboard]', function() {
+      let l = document.location;
+      CATMAID.tools.copyToClipBoard(l.origin + l.pathname + project.createURL());
+    });
 
     document.getElementById( "login_box" ).style.display = "block";
     document.getElementById( "logout_box" ).style.display = "none";
@@ -303,8 +384,6 @@ var project;
       CATMAID.toolActions, 'toolbox_project', ''));
     $('#toolbox_edit').replaceWith(CATMAID.createButtonsFromActions(
       CATMAID.EditTool.actions, 'toolbox_edit', ''));
-    $('#toolbox_segmentation').replaceWith(CATMAID.createButtonsFromActions(
-      CATMAID.SegmentationTool.actions, 'toolbox_segmentation', ''));
     $('#toolbox_data').replaceWith(CATMAID.createButtonsFromActions(
       CATMAID.TracingTool.actions, 'toolbox_data', ''));
 
@@ -317,7 +396,6 @@ var project;
     document.getElementById( "toolbox_edit" ).style.display = "none";
     document.getElementById( "toolbox_ontology" ).style.display = "none";
     document.getElementById( "toolbox_data" ).style.display = "none";
-    document.getElementById( "toolbox_segmentation" ).style.display = "none";
     document.getElementById( "toolbox_show" ).style.display = "none";
 
     document.getElementById( "account" ).onkeydown = login_oninputreturn;
@@ -330,6 +408,9 @@ var project;
     project_menu = new Menu();
     document.getElementById( "project_menu" ).appendChild( project_menu.getView() );
 
+    layout_menu = new Menu();
+    document.getElementById( "layout_menu" ).appendChild( layout_menu.getView() );
+
     stack_menu = new Menu();
     document.getElementById( "stack_menu" ).appendChild( stack_menu.getView() );
 
@@ -340,6 +421,7 @@ var project;
     document.getElementById( "user_menu" ).appendChild( user_menu.getView() );
 
     var self = this;
+
     var loadView;
     if (initialDataviewId) {
       loadView = CATMAID.DataViews.getConfig(initialDataviewId)
@@ -360,7 +442,6 @@ var project;
         var tools = {
           navigator: CATMAID.Navigator,
           tracingtool: CATMAID.TracingTool,
-          segmentationtool: CATMAID.SegmentationTool,
           classification_editor: null
         };
 
@@ -383,13 +464,50 @@ var project;
           if (tool) {
             project.setTool(new tool());
           }
+
+          var locationIsProvided = typeof zp == "number" &&
+              typeof yp == "number" && typeof xp == "number";
           if (init_active_node_id) {
             // initialization hack
             SkeletonAnnotations.init_active_node_id = init_active_node_id;
-          }
-          if (init_active_skeleton_id) {
+
+            if (!locationIsProvided) {
+              return CATMAID.Nodes.getLocation(init_active_node_id)
+                .then(function(result) {
+                   return project.moveTo(result[3], result[2], result[1])
+                      .then(function(){
+                         return SkeletonAnnotations.staticSelectNode(init_active_node_id);
+                      });
+                })
+                .catch(function() {
+                  CATMAID.warn('Could not select node ' + init_active_node_id);
+                });
+            }
+          } else if (init_active_skeleton_id) {
             // initialization hack
             SkeletonAnnotations.init_active_skeleton_id = init_active_skeleton_id;
+
+            if (!locationIsProvided) {
+              return CATMAID.Skeletons.getRootNode(project.id, init_active_skeleton_id)
+                .then(function(result) {
+                   return project.moveTo(result.z, result.y, result.x)
+                      .then(function(){
+                         return SkeletonAnnotations.staticSelectNode(result.root_id);
+                      });
+                })
+                .catch(function() {
+                  CATMAID.warn('Could not select skeleton ' + init_active_skeleton_id);
+                });
+            }
+          }
+        })
+        .catch(function(e) {
+          // Handle login errors explicitely to re-init the web client
+          // after login.
+          if (e instanceof CATMAID.PermissionError) {
+            new CATMAID.LoginDialog(e.error, CATMAID.initWebClient).show();
+          } else {
+            CATMAID.handleError(e);
           }
         });
 
@@ -404,7 +522,7 @@ var project;
               // Open stack and queue test/loading for next one
               var sid = sids.shift();
               var s = ss.shift();
-              return CATMAID.openProjectStack(pid, sid, useExistingStackViewer, undefined, noLayout)
+              return CATMAID.openProjectStack(pid, sid, useExistingStackViewer, undefined, noLayout, false)
                 .then(function() {
                   // Moving every stack is not really necessary, but for now a
                   // convenient way to apply the requested scale to each stack.
@@ -421,7 +539,13 @@ var project;
           }
           return Promise.resolve();
         }
-      }).catch(CATMAID.handleError);
+      })
+      .catch(CATMAID.handleError)
+      .then(function() {
+        if (help !== undefined) {
+          self.setContextHelpVisibility(help);
+        }
+      });
 
     // the text-label toolbar
 
@@ -440,6 +564,15 @@ var project;
     // change global bottom bar height, hide the copyright notice
     // and move the statusBar
     CATMAID.statusBar.setBottom();
+
+    // Context help button
+    self._contextHelpButton = document.getElementById('context-help-button');
+    if (self._contextHelpButton) {
+      self._contextHelpButton.addEventListener('click', function() {
+        self.setContextHelpVisibility(!self.showContextHelp);
+      });
+    }
+    self.updateContextHelp();
 
     window.onresize();
 
@@ -474,17 +607,27 @@ var project;
 
         self.refresh();
 
+        // maps project tags to parent menus (which are dropped if no project is tagged)
+        var tagToMenuData = {
+          '' : {
+            'title': 'untagged projects',
+            'comment': '',
+            'note': '',
+            'action': []
+          }
+        };
+
         // Prepare JSON so that a menu can be created from it. Display only
         // projects that have at least one stack linked to them.
-        var projects = json.filter(function(p) {
+        json.filter(function(p) {
           return p.stacks.length > 0;
-        }).map(function(p) {
+        }).forEach(function(p) {
           var stacks = p.stacks.reduce(function(o, s) {
             o[s.id] = {
               'title': s.title,
               'comment': s.comment,
               'note': '',
-              'action': CATMAID.openProjectStack.bind(window, p.id, s.id, false, undefined, false)
+              'action': CATMAID.openProjectStack.bind(window, p.id, s.id, false, undefined, false, true)
             };
             return o;
           }, {});
@@ -493,12 +636,12 @@ var project;
               'title': sg.title,
               'comment': sg.comment,
               'note': '',
-              'action': CATMAID.openStackGroup.bind(window, p.id, sg.id, false)
+              'action': CATMAID.openStackGroup.bind(window, p.id, sg.id, true)
             };
             return o;
           }, {});
 
-          return {
+          var projectMenuData = {
             'title': p.title,
             'note': '',
             'action': [{
@@ -506,17 +649,60 @@ var project;
               'comment': '',
               'note': '',
               'action': stacks
-            }, {
-              'title': 'Stack groups',
-              'comment': '',
-              'note': '',
-              'action': stackgroups
             }]
 
           };
+
+          // only add stackgroups sub-menu if they exist
+          if (stackgroups.length > 0) {
+            projectMenuData.action.push({
+                                          'title': 'Stack groups',
+                                          'comment': '',
+                                          'note': '',
+                                          'action': stackgroups
+                                        });
+          }
+
+          if (p.hasOwnProperty('tags')) {
+
+            // add project to parent tag menu for each of its tags
+            for (var i=0; i < p.tags.length; i++) {
+              var tag = p.tags[i];
+              var tagMenuData;
+              if (! tagToMenuData.hasOwnProperty(tag)) {
+                tagMenuData = {
+                  'title': tag + ' projects',
+                  'comment': '',
+                  'note': '',
+                  'action': []
+                };
+                tagToMenuData[tag] = tagMenuData;
+              } else {
+                tagMenuData = tagToMenuData[tag];
+              }
+
+              tagMenuData.action.push(projectMenuData);
+            }
+
+          } else {
+
+            // add project to untagged parent
+            tagToMenuData[''].action.push(projectMenuData);
+
+          }
+
         });
 
-        project_menu.update(projects);
+        // place untagged projects at top of root level
+        var menuData = tagToMenuData[''].action;
+
+        // nest remaining tag menus in tag order
+        var sortedTagList = Object.keys(tagToMenuData).sort();
+        for (var i=1; i < sortedTagList.length; i++) {
+          menuData.push(tagToMenuData[sortedTagList[i]]);
+        }
+
+        project_menu.update(menuData);
 
         return self.projects;
       })
@@ -611,7 +797,18 @@ var project;
 
     // Handle error to reset cursor, but also return it to communicate it to
     // caller.
-    login.catch(CATMAID.handleError)
+    login.catch(error => {
+        if (error instanceof CATMAID.InactiveLoginError) {
+          // If an inactive account is a member of inactivity groups, display
+          // information on them. Otherwise show only a warning.
+          if (error.meta && error.meta.inactivity_groups && error.meta.inactivity_groups.length > 0) {
+            let dialog = new CATMAID.InactiveLoginDialog(error.meta.inactivity_groups);
+            dialog.show();
+            return;
+          }
+        }
+        return CATMAID.handleError(error);
+      })
       .then((function() {
         CATMAID.ui.releaseEvents();
         this.refreshBackChannel();
@@ -1040,9 +1237,13 @@ var project;
         var rootWindow = CATMAID.rootWindow;
 
         /* be the first window */
-        if ( rootWindow.getFrame().parentNode != document.body )
+        let windowContainer = document.getElementById('windows');
+        if (!windowContainer) {
+          throw new CATMAID.ValueError("Could not find window container");
+        }
+        if (rootWindow.getFrame().parentNode != windowContainer)
         {
-          document.body.appendChild( rootWindow.getFrame() );
+          windowContainer.appendChild( rootWindow.getFrame() );
           document.getElementById( "content" ).style.display = "none";
         }
 
@@ -1089,7 +1290,11 @@ var project;
   // a function for creating data view menu handlers
   var handleDataViewSelection = function(id) {
     // close any open project and its windows
-    CATMAID.rootWindow.closeAllChildren();
+    if (project) {
+      project.destroy();
+    } else {
+      CATMAID.rootWindow.closeAllChildren();
+    }
 
     CATMAID.DataViews.getConfig(id)
       .then(function(config) {
@@ -1160,6 +1365,17 @@ var project;
     var self = this;
     CATMAID.DataViews.getDefaultConfig()
       .then(function(config) {
+        // If no data view is defined on the back-end, use a default data view.
+        if (!config || !config.id || CATMAID.tools.isEmpty(config.config)) {
+          config = {
+            id: null,
+            type: 'simple_project_list_data_view',
+            config: {
+              header: false,
+              message: false
+            }
+          };
+        }
         var dataview = CATMAID.DataView.makeDataView(config);
         self.switch_dataview(dataview, background);
       })
@@ -1175,19 +1391,135 @@ var project;
     return false;
   };
 
+  Client.prototype._handleProjectToolChange = function() {
+    this.updateContextHelp();
+  };
+
+  Client.prototype._handleProjectDestroyed = function() {
+    this.updateContextHelp(true);
+  };
+
+  Client.prototype._handleRequestStart = function() {
+    this.setSpinnerVisibility(true);
+    this.setContextHelpButtonVisibility(false);
+  };
+
+  Client.prototype._handleRequestEnd = function() {
+    this.setSpinnerVisibility(false);
+    this.setContextHelpButtonVisibility(true);
+  };
+
+  Client.prototype.setSpinnerVisibility = function(visible) {
+    if (!this._spinner) {
+      this._spinner = document.getElementById( "spinner" );
+    }
+    if (this._spinner) {
+      this._spinner.style.display = visible ? "block" : "none";
+    }
+  };
+
+  Client.prototype.setContextHelpButtonVisibility = function(visible) {
+    if (!this._contextHelpButton) {
+      this._contextHelpButton = document.getElementById("context-help-button");
+    }
+    if (this._contextHelpButton) {
+      this._contextHelpButton.style.display = visible ? "block" : "none";
+    }
+  };
+
+  Client.prototype.setContextHelpVisibility = function(visible) {
+    if (!this._contextHelp) {
+      this._contextHelp = document.getElementById("context-help");
+    }
+    let dialogContainer = document.getElementById('dialogs');
+    if (this._contextHelp && dialogContainer) {
+      if (visible) {
+        dialogContainer.appendChild(this._contextHelp);
+      } else if (this._contextHelp.parentNode == dialogContainer) {
+        dialogContainer.removeChild(this._contextHelp);
+      }
+    }
+    this.showContextHelp = visible;
+  };
+
+  Client.prototype.updateContextHelp = function(forceNoProject) {
+    if (!this._contextHelp) {
+      this._contextHelp = document.getElementById("context-help");
+    }
+    if (!this._contextHelp) {
+      return;
+    }
+
+    let content = [
+      '<div class="close-box"><i class="fa fa-close"></i></div>',
+      '<div class="content">',
+      '<h1>Overview</h1>',
+      '<p>CATMAID is a collaborative platform for browsing large image stacks, ',
+      'neuron reconstruction, circuit and morphology ananlysis as well as ',
+      'ontology annotation.</p>'
+    ];
+
+    if (project && !forceNoProject) {
+      Array.prototype.push.apply(content, [
+        '<p>With a project open, the top bar provides access to ',
+        'various tools. The first section contains general tools (<em>Open Widget</em>, ',
+        '<em>Navigator</em>, <em>Settings</em>, <em>Help</em>). The second section ',
+        'shows all enabled workflow tools (<em>Neuron reconstruction</em>, ',
+        '<em>Ontologies</em>, ...). With a particular workflow tool selected, a ',
+        'provides quick access icons for widgets related to this tool.</p>',
+        '<p>There is a dynamically adjusted scale displayed in the lower left ',
+        'corner. The little blue/white box in the lower left corner is used to ',
+        'toggle the display of the layer settings, which all the configuration ',
+        'of all displayed <em>layers</em> in the current <em>Stack Viewer</em>. ',
+        'If <em>WebGL</em> is enabled, tools like additive color blending, look ',
+        'up tables or contrast / saturation / brighness adjustment can be ',
+        'configured there.  The lower right corner provides access to a thumbnail ',
+        'sized overview image of the current location.<p>'
+      ]);
+
+      let tool = project.getTool();
+      if (tool && CATMAID.tools.isFn(tool.getContextHelp)) {
+        content.push(tool.getContextHelp());
+      }
+    } else {
+      Array.prototype.push.apply(content, [
+        '<p>The front-page is organized in so called ',
+        '<em>data views</em>. In their simplest form the current ',
+        'data view shows all projects visible to the current user ',
+        'along with their linked <em>Stacks</em> and <em>Stack groups</em>.</p>',
+        '<p>Other views are, however, possible as well so that other ',
+        'or filered content might be shown. Custom data views can be ',
+        'configured in the admin interface. The context menu for the ',
+        '<em>Home</em> menu link in the top tool bar provides access ',
+        'to all available data views. The small icon at the right of ',
+        'each menu entry allows to link directly to a particular view.</p>',
+        '<p>The <em>Projects menu</em> provides an alternate way to access ',
+        'visible projects. For each project, stacks and stack groups are ',
+        'shown in the menu. ',
+        'Clicking on a particular <em>Stack</em> or <em>Stack group</em> ',
+        'link will open the respective project along with the selected ',
+        'stack selection.</p>'
+      ]);
+    }
+
+    this._contextHelp.innerHTML = content.join('');
+  };
+
+
   // Export Client
   CATMAID.Client = Client;
-
 
   /**
    * Open the given a specific stack group in a project.
    *
-   * @param  {number}    pid       ID of the project to open.
-   * @param  {number}    sgid      ID of the stack group to open.
-   *
+   * @param {number}  pid          ID of the project to open.
+   * @param {number}  sgid         ID of the stack group to open.
+   * @param {boolean} handleErrors (optional) If true, errors are handled
+   *                               internally and even in the case of errors a
+   *                               resolved promise is returned
    * @returns promise that will be resolved on success
    */
-  CATMAID.openStackGroup = function(pid, sgid) {
+  CATMAID.openStackGroup = function(pid, sgid, handleErrors) {
     var request = CATMAID.fetch(pid + "/stackgroup/" + sgid + "/info", "GET")
       .then(function(json) {
         if (!json.stacks || 0 === json.stacks.length) {
@@ -1210,7 +1542,7 @@ var project;
 
         function loadNextStack(pid, stackIndex, sgId, stacks, firstStackViewer) {
           var stack = stacks[stackIndex];
-          return CATMAID.fetch(pid + '/stack/' + stack.id + '/info', 'GET')
+          return CATMAID.fetch(pid + '/stack/' + stack.id + '/info')
             .then(function(json) {
               var stackViewer;
               // If there is already a stack loaded and this stack is a channel of
@@ -1237,13 +1569,13 @@ var project;
                       stacks: stacks
                     };
                     CATMAID.layoutStackViewers();
-                    // Make all tile layers visible, they have been initialized
+                    // Make all stack layers visible, they have been initialized
                     // invisible.
                     for (var i=0; i<loadedStackViewers.length; ++i) {
                       var sv = loadedStackViewers[i];
-                      var tileLayers = sv.getLayersOfType(CATMAID.TileLayer);
-                      for (var j=0; j<tileLayers.length; ++j) {
-                        var tl = tileLayers[j];
+                      var stackLayers = sv.getLayersOfType(CATMAID.StackLayer);
+                      for (var j=0; j<stackLayers.length; ++j) {
+                        var tl = stackLayers[j];
                         tl.setOpacity(1.0);
                         tl.redraw();
                       }
@@ -1263,6 +1595,9 @@ var project;
       }
     });
 
+    if (handleErrors) {
+      request = request.catch(CATMAID.handleError);
+    }
     return request;
   };
 
@@ -1273,26 +1608,34 @@ var project;
    * @param  {number|string} projectID   ID of the project to open. If different
    *                                     than the ID of the currently open
    *                                     project, it will be destroyed.
-   * @param  {number}  stackID           ID of the stack to open.
+   * @param  {number|string} reorientedStackID ID of the stack to open.
    * @param  {boolean} useExistingViewer True to add the stack to the existing,
    *                                     focused stack viewer.
    * @param  {number}  mirrorInde        An optional mirror index, defaults to
    *                                     the first available.
    * @param  {boolean} noLayout          Falsy to layout all available stack
    *                                     viewers (default).
+   * @param  {boolean} handleErrors      (optional) If true, errors are handled
+   *                                     internally and even in the case of
+   *                                     errors a resolved promise is returned
    * @return {Promise}                   A promise yielding the stack viewer.
    */
-  CATMAID.openProjectStack = function(projectID, stackID, useExistingViewer, mirrorIndex, noLayout) {
+  CATMAID.openProjectStack = function(projectID, reorientedStackID, useExistingViewer,
+      mirrorIndex, noLayout, handleErrors) {
     if (project && project.id != projectID) {
       project.destroy();
     }
+
+    let {stackID, reorient} = CATMAID.Stack.parseReorientedID(reorientedStackID);
 
     CATMAID.ui.catchEvents("wait");
     var open = CATMAID.fetch(projectID + '/stack/' + stackID + '/info')
       .then(function(json) {
         return handle_openProjectStack(json,
             useExistingViewer ? project.focusedStackViewer : undefined,
-            mirrorIndex)
+            mirrorIndex,
+            undefined,
+            reorient)
           .then(function() {
             if (noLayout) {
               return;
@@ -1308,18 +1651,73 @@ var project;
 
     // Catch any error, but return original rejected promise
     open.catch(function(e) {
-        CATMAID.ui.releaseEvents();
-        // Handle login errors explicitely to re-init the web client after
-        // re-login.
-        if (e && e.permission_error) {
-          new CATMAID.LoginDialog(e.error, CATMAID.initWebClient).show();
-        } else {
-          return Promise.reject(e);
-        }
-      });
+      CATMAID.ui.releaseEvents();
+    });
 
+    if (handleErrors) {
+      open = open.catch(CATMAID.handleError);
+    }
     return open;
   };
+
+  function updateLayoutMenu() {
+    var layoutMenuContent = [{
+      id: 'save-current-layout',
+      title: 'Save current layout',
+      note: '',
+      action: function() {
+        // Ask for name
+        var dialog = new CATMAID.OptionsDialog();
+        dialog.appendMessage('Please enter the name for the new layout');
+        var nameInput = dialog.appendField("Name: ", 'new-layout-name', '', true);
+        dialog.onOK = function() {
+          var layoutName =nameInput.value.trim();
+          if (layoutName.length === 0) {
+            throw new CATMAID.ValueError('Please choose a valid layout name');
+          }
+          CATMAID.Layout.addUserLayout(layoutName, CATMAID.rootWindow)
+            .then(function() {
+              CATMAID.msg('Success', 'New layout "' + layoutName + '" stored');
+            })
+            .catch(CATMAID.handleError);
+        };
+        dialog.show('auto', 'auto');
+      }
+    }, {
+      id: 'close-all-widgets',
+      title: 'Close all widgets',
+      note: '',
+      action: function() {
+        if (!confirm('Are you sure you want to close all widgets?')) {
+          return;
+        }
+        CATMAID.WindowMaker.closeAllButStackViewers(project.getStackViewers());
+      }
+    }];
+    var userLayouts = CATMAID.Layout.Settings.session.user_layouts;
+    if (userLayouts && userLayouts.length > 0) {
+      userLayouts.forEach(function(spec) {
+        try {
+          let info = CATMAID.Layout.parseAliasedLayout(spec);
+          layoutMenuContent.push({
+            id: 'layout-' + layoutMenuContent.length,
+            title: info.name,
+            note: '',
+            action: function() {
+              let layout = new CATMAID.Layout(info.spec);
+              if (CATMAID.switchToLayout(layout)) {
+                CATMAID.msg('Success', 'Layout ' + info.name + ' loaded');
+              }
+            }
+          });
+        } catch (error) {
+          CATMAID.warn(error);
+        }
+      });
+    }
+
+    layout_menu.update(layoutMenuContent);
+  }
 
   /**
    * Open a stack from a stack info API JSON response. Open the project or, if
@@ -1330,12 +1728,12 @@ var project;
    * @param  {StackViewer} stackViewer Viewer to which to add the stack.
    * @param  {number}      mirrorIndex Optional mirror index, defaults to
    *                                   the first available.
-   * @param  {Boolean} hide            The stack's tile layer will initially be
+   * @param  {Boolean} hide            The stack's layer will initially be
    *                                   hidden.
    * @return {Promise}                 A promise yielding the stack viewer
    *                                   containing the new stack.
    */
-  function handle_openProjectStack( e, stackViewer, mirrorIndex, hide )
+  function handle_openProjectStack( e, stackViewer, mirrorIndex, hide, reorient )
   {
     if (!stackViewer) {
       CATMAID.throwOnInsufficientWebGlContexts(1);
@@ -1350,6 +1748,13 @@ var project;
       return Promise.all([project.updateInterpolatableLocations(),
           CATMAID.DataStoreManager.reloadAll()]).then(function () {
         CATMAID.Init.trigger(CATMAID.Init.EVENT_PROJECT_CHANGED, project);
+
+        updateLayoutMenu();
+
+        // Make menus visible if a project is loaded, otherwise hide them.
+        var layoutMenuBox = document.getElementById( "layoutmenu_box" );
+        layoutMenuBox.firstElementChild.lastElementChild.style.display = "none";
+        layoutMenuBox.style.display = "block";
 
         // Update the projects stack menu. If there is more than one stack
         // linked to the current project, a submenu for easy access is
@@ -1367,11 +1772,11 @@ var project;
                     action: [{
                         title: 'Open in new viewer',
                         note: '',
-                        action: CATMAID.openProjectStack.bind(window, s.pid, s.id, false, undefined, true)
+                        action: CATMAID.openProjectStack.bind(window, s.pid, s.id, false, undefined, true, true)
                       },{
                         title: 'Add to focused viewer',
                         note: '',
-                        action: CATMAID.openProjectStack.bind(window, s.pid, s.id, true, undefined, true)
+                        action: CATMAID.openProjectStack.bind(window, s.pid, s.id, true, undefined, true, true)
                       }
                     ]
                   }
@@ -1385,35 +1790,31 @@ var project;
             }
           }).catch(CATMAID.handleError);
 
-        return loadStack(e, undefined, hide);
+        return loadStack(e, undefined, hide, reorient);
       });
     } else {
       // Call loadStack() asynchronously to catch potential errors in the
       // promise handling code. Otherwise, an error during the construction of
       // one stack viewer will cancel the following ones.
       return new Promise(function(resolve, reject) {
-        resolve(loadStack(e, stackViewer, hide));
+        resolve(loadStack(e, stackViewer, hide, reorient));
       });
     }
 
-    function loadStack(e, stackViewer, hideTileLayer) {
+    function loadStack(e, stackViewer, hideStackLayer, reorient) {
       var useExistingViewer = typeof stackViewer !== 'undefined';
 
-      var stack = new CATMAID.Stack(
-          e.sid,
-          e.stitle,
-          e.dimension,
-          e.resolution,
-          e.translation,    //!< @todo replace by an affine transform
-          e.broken_slices,
-          e.num_zoom_levels,
-          -2,
-          e.description,
-          e.metadata,
-          e.orientation,
-          e.canary_location,
-          e.placeholder_color,
-          e.mirrors);
+      var stack = new CATMAID.Stack.fromStackInfoJson(e);
+      if (CATMAID.tools.isNumber(reorient)) {
+        stack = new CATMAID.ReorientedStack(stack, reorient);
+      }
+
+      // If this is a label stack, not a raw stack, create a label annotation
+      // manager.
+      // TODO: should eventually use a backend image label space instead.
+      if (!!stack.labelMetadata()) {
+        CATMAID.LabelAnnotations.get(stack);
+      }
 
       if (!useExistingViewer) {
         stackViewer = new CATMAID.StackViewer(project, stack);
@@ -1421,29 +1822,27 @@ var project;
 
       document.getElementById( "toolbox_project" ).style.display = "block";
 
-      var tilelayerConstructor = CATMAID.TileLayer.Settings.session.prefer_webgl ?
-          CATMAID.PixiTileLayer :
-          CATMAID.TileLayer;
-      var tilelayer = new tilelayerConstructor(
+      var stackLayerConstructor = CATMAID.StackLayer.preferredConstructorForStack();
+      var stackLayer = new stackLayerConstructor(
           stackViewer,
           "Image data (" + stack.title + ")",
           stack,
           mirrorIndex,
-          !hideTileLayer,
-          hideTileLayer ? 0 : 1,
+          !hideStackLayer,
+          hideStackLayer ? 0 : 1,
           !useExistingViewer,
-          CATMAID.TileLayer.Settings.session.linear_interpolation,
+          CATMAID.StackLayer.INTERPOLATION_MODES.INHERIT,
           true);
 
       if (!useExistingViewer) {
-        stackViewer.addLayer( "TileLayer", tilelayer );
+        stackViewer.addLayer("StackLayer", stackLayer);
 
         project.addStackViewer( stackViewer );
 
-        // refresh the overview handler to also register the mouse events on the buttons
+        // refresh the overview handler to also register the pointer events on the buttons
         stackViewer.layercontrol.refresh();
       } else {
-        stackViewer.addStackLayer(stack, tilelayer);
+        stackViewer.addStackLayer(stack, stackLayer);
       }
 
       CATMAID.ui.releaseEvents();

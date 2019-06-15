@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import re
 import cProfile, pstats
@@ -15,7 +14,7 @@ from guardian.utils import get_anonymous_user
 
 from rest_framework.authentication import TokenAuthentication
 
-from six import StringIO
+from io import StringIO
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +59,7 @@ class CsrfBypassTokenAuthenticationMiddleware(object):
                 request.user = token_auth[0]
                 request.auth = token_auth[1]
                 request._dont_enforce_csrf_checks = True
+                request._is_token_authenticated = True
         except:
             pass
 
@@ -96,7 +96,8 @@ class AjaxExceptionMiddleware(object):
         response = {
             'error': str(exception),
             'detail': format_exc(),
-            'type': type(exception).__name__
+            'type': type(exception).__name__,
+            'meta': getattr(exception, 'meta', None),
         }
         if settings.DEBUG:
             import sys, traceback
@@ -136,12 +137,12 @@ class BasicModelMapMiddleware(object):
         return self.get_response(request)
 
 
-class FlyTEMMiddleware(BasicModelMapMiddleware):
-    """Let this middleware redirect requests for stacks and projects to FlyTEM
-    render service models.
+class JaneliaRenderMiddleware(BasicModelMapMiddleware):
+    """Let this middleware redirect requests for stacks and projects to
+    Janelia render web service models.
     """
 
-    url_prefix = '/flytem'
+    url_prefix = '/janelia-render'
 
 
 class DVIDMiddleware(BasicModelMapMiddleware):

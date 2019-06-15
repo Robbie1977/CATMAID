@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 
 from catmaid.control.authentication import requires_user_role
 from catmaid.models import StackGroup, StackStackGroup, UserRole
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 
 
 @requires_user_role(UserRole.Browse)
-def get_stackgroup_info(request, project_id, stackgroup_id):
+def get_stackgroup_info(request:HttpRequest, project_id, stackgroup_id) -> JsonResponse:
     """Get detailed informated about a stack group. This includes the linked
     stacks and what relations they use.
     """
@@ -18,7 +17,6 @@ def get_stackgroup_info(request, project_id, stackgroup_id):
         .filter(stack_group=stackgroup_id) \
         .order_by('position') \
         .select_related('group_relation')
-    stacks = [l.stack_id for l in stackgroup_links]
 
     result = {
         'id': stackgroup.id,

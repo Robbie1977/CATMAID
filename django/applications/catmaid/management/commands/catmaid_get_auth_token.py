@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 import getpass
 import logging
-
-import six.moves
 
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
@@ -27,7 +24,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # full names for user input functions needed for mocking in unit tests
-        username = options.get('username') or six.moves.input('Enter CATMAID username: ')
+        username = options.get('username') or input('Enter CATMAID username: ')
         password = options.get('password') or getpass.getpass('Enter CATMAID password: ')
 
         user = authenticate(username=username, password=password)

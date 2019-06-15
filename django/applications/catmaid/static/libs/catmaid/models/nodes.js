@@ -5,6 +5,33 @@
 
   "use strict";
 
+  var Treenode = function(id, x, y, z, parentId, childIds, skeletonId, radius,
+      confidence, creatorId, editionTime) {
+    this.id = id;
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.radius = radius;
+    this.confidence = confidence;
+    this.parentId = parentId;
+    this.childIds = childIds;
+    this.skeletonId = skeletonId;
+    this.creatorId = creatorId;
+    this.editionTime = editionTime;
+  };
+
+  CATMAID.Treenode = Treenode;
+
+
+  var Treenodes = {
+    info: function(projectId, treenodeId) {
+      return CATMAID.fetch(`${projectId}/treenodes/${treenodeId}/info`);
+    },
+  };
+
+  CATMAID.Treenodes = Treenodes;
+
+
   /**
    * This namespace provides functions to work with annotations on neurons. All
    * of them return promises.
@@ -60,13 +87,13 @@
         state: state.makeMultiNodeState(treenodeIds)
       };
 
-      return CATMAID.fetch(url, 'POST', params).then(function(json) {
+      return CATMAID.fetch(url, 'POST', params).then((function(json) {
         this.trigger(CATMAID.Nodes.EVENT_NODE_RADIUS_CHANGED, json.updated_nodes);
         return {
           // An object mapping node IDs to their old and new radius is returned.
           'updatedNodes': json.updated_nodes,
         };
-      });
+      }).bind(this));
     },
 
     /**
@@ -165,8 +192,10 @@
 
       return CATMAID.fetch(url, 'POST', params)
         .then(function(result) {
-          CATMAID.Nodes.trigger(CATMAID.Nodes.EVENT_NODE_CREATED,
-              result.treenode_id, x, y, z);
+          var newNode = new CATMAID.Treenode(result.treenode_id, x, y, z,
+              parentId, undefined, result.skeleton_id, radius,
+              confidence, CATMAID.session.userid, result.edition_time);
+          CATMAID.Nodes.trigger(CATMAID.Nodes.EVENT_NODE_CREATED, newNode);
           CATMAID.Skeletons.trigger(CATMAID.Skeletons.EVENT_SKELETON_CHANGED,
               result.skeleton_id, [[result.treenode_id, x, y, z]]);
           return result;
@@ -236,8 +265,10 @@
 
       return CATMAID.fetch(url, 'POST', params)
         .then(function(result) {
-          CATMAID.Nodes.trigger(CATMAID.Nodes.EVENT_NODE_CREATED,
-              result.treenode_id, x, y, z);
+          var newNode = new CATMAID.Treenode(result.treenode_id, x, y, z,
+              parentId, childId ? [childId] : undefined, result.skeleton_id,
+              radius, confidence, CATMAID.session.userid, result.edition_time);
+          CATMAID.Nodes.trigger(CATMAID.Nodes.EVENT_NODE_CREATED, newNode);
           CATMAID.Skeletons.trigger(CATMAID.Skeletons.EVENT_SKELETON_CHANGED,
               result.skeleton_id, [[result.treenode_id, x, y, z]]);
           return result;
@@ -333,7 +364,82 @@
     getLocation: function(nodeId) {
       return CATMAID.fetch(project.id + "/node/get_location",
           'POST', {tnid: nodeId});
-    }
+    },
+
+    /**
+     * Get list of suppressed virtual nodes for the passed in node ID.
+     *
+     * @param {number} projectId Project to operate in.
+     * @param {number} nodeId    Treenode to look up supporessed virtual nodes for.
+     * @returns Promise resolving in list of suppressed virtual nodes.
+     */
+    getSuppressdVirtualNodes: function(projectId, nodeId) {
+      return CATMAID.fetch(project.id + "/treenodes/" + nodeId + "/suppressed-virtual/");
+    },
+
+    /**
+     * Suppress virtual nodes of a particular real node.
+     *
+     * @param {number} projectId   Project to operate in.
+     * @param {number} nodeId      Treenode to suppress virtual node for.
+     * @param {string} orientation View through data set, either 'x', 'y', or 'z'.
+     * @param {array}  coordinate  The location of the virtual node to suppress.
+     * @returns Promise resolving in success information.
+     */
+    addSuppressedVirtualNode: function(projectId, nodeId, orientation, coordinate) {
+      return CATMAID.fetch(project.id + '/treenodes/' + nodeId + '/suppressed-virtual/',
+          'POST', {
+            orientation: orientation,
+            location_coordinate: coordinate,
+          });
+    },
+
+    /**
+     * Delete a particular suppressed virtual node marked on a real node.
+     *
+     * @param {number} projectId    The project to operate in.
+     * @param {number} nodeId       Treenode for which a suppressed virtual node
+     *                              should be deleted.
+     * @param {number} suppressedId Virtual node ID to delete suppressing for.
+     * @returns Promise resolving in success information.
+     */
+    deleteSuppresedVirtualNode: function(projectId, nodeId, suppressedId) {
+      let url = projectId + '/treenodes/' + nodeId + '/suppressed-virtual/' + suppressedId;
+      return CATMAID.fetch(url, 'DELETE');
+    },
+
+    /**
+     * Get the closest treenode relative to the passed in location
+     *
+     * @param {number} projectId  The project to operate in.
+     * @param {number} x          X coordinate of query location.
+     * @param {number} y          Y coordinate of query location.
+     * @param {number} z          Z coordinate of query location.
+     * @param {number} targetId   (optional) ID of skeleton or neuron the result
+     *                            node should be part of.
+     * @param {string} targetType (optional) If <targetId> is provided,
+     *                            specifies if it is a 'neuron' or 'skeleton'.
+     * @returns Promise resolving in closest treenode.
+     */
+    nearestNode: function(projectId, x, y, z, targetId, targetType) {
+      let params = {
+        x: x,
+        y: y,
+        z: z,
+      };
+      params[`${targetType}_id`] = targetId;
+      return CATMAID.fetch(projectId + "/nodes/nearest", "GET", params);
+    },
+
+    /**
+     * Get the most recently edited treenode.
+     */
+    mostRecentlyEditedNode: function(projectId, skeletonId, userId) {
+      return CATMAID.fetch(project.id + '/nodes/most-recent', 'GET', {
+        'skeleton_id': skeletonId,
+        'user_id': userId,
+      });
+    },
 
   };
 

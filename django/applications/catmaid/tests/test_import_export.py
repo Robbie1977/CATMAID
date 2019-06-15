@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
-import json
-import six
-import yaml
 
 from ast import literal_eval
+import json
+from typing import List
+import yaml
+
 from guardian.shortcuts import assign_perm
 
 from django.http import HttpResponse
@@ -45,7 +44,7 @@ class ImportExportTests(TestCase):
         """Import a set of new projects, stacks and stack groups. This tests
         only the actual import. Retrieving the data to import from different
         sources is not part of this test.
-        """ 
+        """
         project_url = 'https://catmaid-test/'
         data_folder = '/tmp/catmaid-test/'
         existing_projects = list(Project.objects.all())
@@ -116,13 +115,13 @@ class ImportExportTests(TestCase):
             importer.PreProject(p2_config, project_url, data_folder),
         ]
 
-        tags = []
-        permissions = []
+        tags = [] # type: List
+        permissions = [] # type: List
         default_tile_width = 256
         default_tile_height = 512
         default_tile_source_type = 5
         default_position = 0
-        cls_graph_ids_to_link = []
+        cls_graph_ids_to_link = [] # type: List
         remove_unref_stack_data = False
 
         imported, not_imported = importer.import_projects(self.user,
@@ -153,9 +152,9 @@ class ImportExportTests(TestCase):
 
             # Test required fields
             self.assertEqual(stack['title'], p2s.title)
-            six.assertCountEqual(self, literal_eval(stack['dimension']),
+            self.assertCountEqual(literal_eval(stack['dimension']),
                     literal_eval(str(p2s.dimension)))
-            six.assertCountEqual(self, literal_eval(stack['resolution']),
+            self.assertCountEqual(literal_eval(stack['resolution']),
                     literal_eval(str(p2s.resolution)))
             self.assertEqual(stack['zoomlevels'], p2s.num_zoom_levels)
 
@@ -188,7 +187,7 @@ class ImportExportTests(TestCase):
 
             # Test project-stack link
             ps = ProjectStack.objects.get(project=p2.id, stack=p2s)
-            six.assertCountEqual(self, literal_eval(stack.get('translation', '(0,0,0)')),
+            self.assertCountEqual(literal_eval(stack.get('translation', '(0,0,0)')),
                     literal_eval(str(ps.translation)))
 
             # Test stack groups
@@ -222,16 +221,16 @@ class ImportExportTests(TestCase):
                 'stacks': [{
                     'broken_sections': [],
                     'title': 'test-stack-1',
-                    'dimension': '(7,17,23)',
+                    'dimension': '(7, 17, 23)',
                     'resolution': '(2,3,5)',
-                    'zoomlevels': -1,
+                    'downsample_factors': None,
                     'orientation': 0,
                     'translation': '(0,0,0)',
                     'metadata': '',
                     'comment': 'Test comment',
                     'attribution': 'Test attribution',
                     'description': 'Simple test data',
-                    'canary_location': '(0,0,0)',
+                    'canary_location': '(0, 0, 0)',
                     'placeholder_color': '(0,0,0,1)',
                     'mirrors': [{
                         'title': 'test-mirror-1',
@@ -246,15 +245,15 @@ class ImportExportTests(TestCase):
                     'broken_sections': [],
                     'comment': None,
                     'title': 'test-stack-2',
-                    'dimension': '(7,17,23)',
+                    'dimension': '(7, 17, 23)',
                     'metadata': '',
                     'resolution': '(2,3,5)',
-                    'zoomlevels': -1,
+                    'downsample_factors': None,
                     'orientation': 0,
                     'translation': '(0,0,0)',
                     'attribution': None,
                     'description': '',
-                    'canary_location': '(0,0,0)',
+                    'canary_location': '(0, 0, 0)',
                     'placeholder_color': '(0.5,0.4,0.3,1)',
                     'mirrors': [{
                         'title': 'test-mirror-2',
@@ -269,15 +268,15 @@ class ImportExportTests(TestCase):
                     'broken_sections': [],
                     'comment': None,
                     'title': 'test-stack-3',
-                    'dimension': '(4,34,9)',
+                    'dimension': '(4, 34, 9)',
                     'metadata': 'Test meta data',
                     'resolution': '(1,2,3)',
-                    'zoomlevels': -1,
+                    'downsample_factors': None,
                     'orientation': 0,
                     'translation': '(0,0,0)',
                     'attribution': None,
                     'description': '',
-                    'canary_location': '(1,2,3)',
+                    'canary_location': '(1, 2, 3)',
                     'placeholder_color': '(0,0,0.3,0.1)',
                     'mirrors': [{
                         'title': 'test-mirror-3',
@@ -304,12 +303,12 @@ class ImportExportTests(TestCase):
         ]
         config = [p1_config, p2_config]
 
-        tags = []
-        permissions = []
+        tags = [] # type: List
+        permissions = [] # type: List
         default_tile_width = 256
         default_tile_height = 512
         default_tile_source_type = 1
-        cls_graph_ids_to_link = []
+        cls_graph_ids_to_link = [] # type: List
         remove_unref_stack_data = False
 
         # Make sure there are no existing projects or stacks
@@ -365,7 +364,7 @@ class ImportExportTests(TestCase):
         # Export imported YAML data
         response = self.client.get('/projects/export')
         self.assertEqual(response.status_code, 200)
-        result_yaml = yaml.load(response.content.decode('utf-8'))
+        result_yaml = yaml.load(response.content.decode('utf-8'), Loader=yaml.FullLoader)
         test_result(result_yaml)
 
         # Export imported JSON data

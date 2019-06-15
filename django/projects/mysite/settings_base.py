@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-from __future__ import absolute_import
-
 # General Django settings for mysite project.
 
 import os
@@ -82,7 +79,7 @@ INSTALLED_APPS = (
     'taggit',
     'adminplus',
     'guardian',
-    'catmaid.apps.CATMAIDConfig',
+    'catmaid',
     'pgcompat',
     'performancetests',
     'pipeline',
@@ -162,6 +159,13 @@ AUTHENTICATION_BACKENDS = (
     'rest_framework.authentication.TokenAuthentication',
 )
 
+# If a request is authenticated through an API token permissions are
+# required, endpoints that require write/annotate permissions also
+# need to have the TokenAnnotate permission. This is enforced also
+# for admin accounts.
+REQUIRE_EXTRA_TOKEN_PERMISSIONS = True
+
+
 # Project ID of a dummy project that will keep all ontologies and
 # classifications that are shared between multiple projects (and are
 # thereby project independent).
@@ -235,6 +239,7 @@ MEDIA_CROPPING_SUBDIRECTORY = 'cropping'
 MEDIA_ROI_SUBDIRECTORY = 'roi'
 MEDIA_TREENODE_SUBDIRECTORY = 'treenode_archives'
 MEDIA_EXPORT_SUBDIRECTORY = 'export'
+MEDIA_CACHE_SUBDIRECTORY = 'cache'
 
 # Cropping output extension
 CROPPING_OUTPUT_FILE_EXTENSION = "tiff"
@@ -249,6 +254,12 @@ GENERATED_FILES_MAXIMUM_SIZE = 52428800
 # The maximum allowed size in bytes for files uploaded for import as skeletons.
 # The default is 5 megabytes.
 IMPORTED_SKELETON_FILE_MAXIMUM_SIZE = 5242880
+
+# The maximum allowed image size for imported images. The default is 3MB.
+IMPORTED_IMAGE_FILE_MAXIMUM_SIZE = 3145728
+
+# The maximum allowd body data size, default is 10 MB.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 8 * 1024**2
 
 # Specifies if user registration is allowed
 USER_REGISTRATION_ALLOWED = False
@@ -273,9 +284,13 @@ CELERY_BEAT_SCHEDULE = {
     },
     # Update project statistics every night at 23:45.
     'daily-project-stats-summary-update': {
-        'task': 'catmaid.tasks.update_project_statistics',
+        'task': 'catmaid.tasks.update_project_statistics_from_scratch',
         'schedule': crontab(hour=23, minute=45)
-    }
+    },
+    'daily-inactive-user-update': {
+        'task': 'catmaid.tasks.deactivate_inactive_users',
+        'schedule': crontab(hour=00, minute=00)
+    },
 }
 
 # We use django-pipeline to compress and reference JavaScript and CSS files. To
@@ -306,21 +321,24 @@ PIPELINE = {
 # and a list of pipeline identifiers for all others.
 NON_COMPRESSED_FILE_IDS = list(pipelinefiles.non_pipeline_js)
 NON_COMPRESSED_FILES = list(pipelinefiles.non_pipeline_js.values())
+COPY_ONLY_FILE_IDS = set(pipelinefiles.copy_only_files)
 STYLESHEET_IDS = list(pipelinefiles.STYLESHEETS)
-COMPRESSED_FILE_IDS = [key for key in pipelinefiles.JAVASCRIPT if key not in NON_COMPRESSED_FILE_IDS]
+COMPRESSED_FILE_IDS = [key for key in pipelinefiles.JAVASCRIPT \
+        if key not in NON_COMPRESSED_FILE_IDS \
+        and key not in COPY_ONLY_FILE_IDS]
 
 INSTALLED_EXTENSIONS = tuple(pipelinefiles.installed_extensions)
 
 # Make Git based version of CATMAID available as a settings field
 VERSION = utils.get_version()
 
-# FlyTEM rendering service. To activate add the following lines to your
+# Janelia rendering service. To activate add the following lines to your
 # settings.py file:
-# MIDDLEWARE += ('catmaid.middleware.FlyTEMMiddleware',)
-# FLYTEM_SERVICE_URL = 'http://renderer-2.int.janelia.org:8080/render-ws/v1/owner/flyTEM'
-# FLYTEM_STACK_RESOLUTION = (4,4,40)
-# FLYTEM_STACK_TILE_WIDTH = 512
-# FLYTEM_STACK_TILE_HEIGHT = 512
+# MIDDLEWARE += ('catmaid.middleware.JaneliaRenderMiddleware',)
+# JANELIA_RENDER_SERVICE_URL = 'http://renderer.int.janelia.org:8080/render-ws/v1'
+# JANELIA_RENDER_DEFAULT_STACK_RESOLUTION = (4,4,35)
+# JANELIA_RENDER_STACK_TILE_WIDTH = 1024
+# JANELIA_RENDER_STACK_TILE_HEIGHT = 1024
 
 # DVID auto-discovery. To activate add the following lines to your settings.py
 # file:
@@ -377,14 +395,17 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ),
-    'VIEW_DESCRIPTION_FUNCTION':
-        'custom_rest_swagger_googledoc.get_googledocstring',
-        # Parser classes priority-wise for Swagger
+    # If no authentication is possible, use guardian's anonymous user
+    'UNAUTHENTICATED_USER': 'guardian.utils.get_anonymous_user',
+    'VIEW_DESCRIPTION_FUNCTION': 'custom_rest_swagger_googledoc.get_googledocstring',
+    # Parser classes priority-wise for Swagger
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.FormParser',
         'rest_framework.parsers.MultiPartParser',
         'rest_framework.parsers.JSONParser',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'custom_swagger_schema.CustomSchema',
+    'URL_FORMAT_OVERRIDE': None,
 }
 
 SWAGGER_SETTINGS = {
@@ -404,3 +425,21 @@ CHANNEL_LAYERS = {
 CATMAID_FULL_URL = ""
 CATMAID_HTTP_AUTH_USER = None
 CATMAID_HTTP_AUTH_PASS = None
+
+# Whether or not to create default data views in the initial migration. This is
+# mainly useful for setups using the JaneliaRender or DVID middleware.
+CREATE_DEFAULT_DATAVIEWS = True
+
+# NBLAST support
+NBLAST_ALL_BY_ALL_MIN_SIZE = 10
+MAX_PARALLEL_ASYNC_WORKERS = 1
+
+# Intersection grid settings, dimensions in project coordinates (nm)
+DEFAULT_CACHE_GRID_CELL_WIDTH = 25000
+DEFAULT_CACHE_GRID_CELL_HEIGHT = 25000
+DEFAULT_CACHE_GRID_CELL_DEPTH = 40
+
+# Whether Postgres should emit "catmaid.spatial-update" events on changes of
+# spatial data (e.g. inserts, updates and deletions of treenodes, connectors and
+# connector links).
+SPATIAL_UPDATE_NOTIFICATIONS = False

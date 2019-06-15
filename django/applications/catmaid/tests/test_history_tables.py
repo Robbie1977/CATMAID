@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import time
-import six
 
 from django.db import connection, transaction, InternalError
 from django.test import TestCase, TransactionTestCase
@@ -36,6 +34,8 @@ class HistoryTableTests(TransactionTestCase):
         # CATMAID tables
         'broken_slice',
         'cardinality_restriction',
+        'catmaid_group_inactivity_period',
+        'catmaid_group_inactivity_period_contact',
         'catmaid_sampler',
         'catmaid_samplerconnector',
         'catmaid_samplerconnectorstate',
@@ -87,6 +87,15 @@ class HistoryTableTests(TransactionTestCase):
         'treenode',
         'treenode_class_instance',
         'treenode_connector',
+        'nblast_sample',
+        'nblast_config',
+        'nblast_similarity',
+        'pointcloud',
+        'pointcloud_point',
+        'point_set',
+        'image_data',
+        'pointcloud_image_data',
+        'volume_class_instance',
 
         # Non-CATMAID tables
         'auth_group',
@@ -113,6 +122,8 @@ class HistoryTableTests(TransactionTestCase):
         # History tables of versioned CATMAID tables
         'broken_slice__history',
         'cardinality_restriction__history',
+        'catmaid_group_inactivity_period__history',
+        'catmaid_group_inactivity_period_contact__history',
         'catmaid_userprofile__history',
         'catmaid_volume__history',
         'catmaid_sampler__history',
@@ -139,9 +150,19 @@ class HistoryTableTests(TransactionTestCase):
         'interpolatable_section__history',
         'location__history',
         'message__history',
+        'nblast_sample__history',
+        'nblast_config__history',
+        'nblast_similarity__history',
+        'nblast_skeleton_source_type__history',
+        'pointcloud__history',
+        'pointcloud_image_data__history',
+        'pointcloud_point__history',
+        'image_data__history',
+        'pointcloud_image_data',
         'point__history',
         'point_connector__history',
         'point_class_instance__history',
+        'point_set__history',
         'project__history',
         'project_stack__history',
         'region_of_interest__history',
@@ -164,6 +185,7 @@ class HistoryTableTests(TransactionTestCase):
         'treenode__history',
         'treenode_class_instance__history',
         'treenode_connector__history',
+        'volume_class_instance__history',
 
         # History tables of versioned non-CATMAID tables
         'auth_group__history',
@@ -187,6 +209,8 @@ class HistoryTableTests(TransactionTestCase):
 
         # Time tables
         'broken_slice__tracking',
+        'catmaid_group_inactivity_period__tracking',
+        'catmaid_group_inactivity_period_contact__tracking',
         'catmaid_sampler__tracking',
         'catmaid_samplerdomain__tracking',
         'catmaid_samplerdomainend__tracking',
@@ -202,6 +226,9 @@ class HistoryTableTests(TransactionTestCase):
         'data_view__tracking',
         'data_view_type__tracking',
         'interpolatable_section__tracking',
+        'nblast_skeleton_source_type__tracking',
+        'pointcloud_point__tracking',
+        'pointcloud_image_data__tracking',
         'project__tracking',
         'project_stack__tracking',
         'reviewer_whitelist__tracking',
@@ -232,12 +259,16 @@ class HistoryTableTests(TransactionTestCase):
         'taggit_taggeditem__tracking',
 
         # Regular unversioned CATMAID tables
+        'dirty_node_grid_cache_cell',
         'node_query_cache',
         'log',
         'treenode_edge',
         'catmaid_history_table',
         'treenode_connector_edge',
         'connector_geom',
+        'nblast_skeleton_source_type',
+        'node_grid_cache_cell',
+        'node_grid_cache',
         'catmaid_transaction_info',
         'catmaid_stats_summary',
         'catmaid_skeleton_summary',
@@ -254,7 +285,9 @@ class HistoryTableTests(TransactionTestCase):
         'djcelery_workerstate',
         'djcelery_taskstate',
         'django_session',
-        'spatial_ref_sys'
+        'pointcloud_group_object_permission',
+        'pointcloud_user_object_permission',
+        'spatial_ref_sys',
     )
 
     def test_name_length_limits(self):
@@ -488,7 +521,7 @@ class HistoryTableTests(TransactionTestCase):
         class_history_entry = new_class_history[-1][0]
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(class_details):
+        for k,v in class_details.items():
             self.assertEqual(v, class_history_entry[k])
 
         # It is now expected that the range of the history interval will end with
@@ -523,9 +556,9 @@ class HistoryTableTests(TransactionTestCase):
         class_history_2_entry_2 = new_class_2_history[-1][0]
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(class_details):
+        for k,v in class_details.items():
             self.assertEqual(v, class_history_2_entry_1[k])
-        for k,v in six.iteritems(new_class_details):
+        for k,v in new_class_details.items():
             self.assertEqual(v, class_history_2_entry_2[k])
 
         # It is now expected that the range in the first interval will
@@ -596,7 +629,7 @@ class HistoryTableTests(TransactionTestCase):
         project_history_entry = new_project_history[-1][0]
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(project_details):
+        for k,v in project_details.items():
             self.assertEqual(v, project_history_entry[k])
 
         # It is now expected that the range of the history interval will end with
@@ -636,9 +669,9 @@ class HistoryTableTests(TransactionTestCase):
         project_history_2_entry_2 = new_project_2_history[-1][0]
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(project_details):
+        for k,v in project_details.items():
             self.assertEqual(v, project_history_2_entry_1[k])
-        for k,v in six.iteritems(new_project_details):
+        for k,v in new_project_details.items():
             self.assertEqual(v, project_history_2_entry_2[k])
 
         # It is now expected that the range in the first interval will
@@ -695,7 +728,7 @@ class HistoryTableTests(TransactionTestCase):
         class_history_entry = new_class_history[-1][0]
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(class_details):
+        for k,v in class_details.items():
             self.assertEqual(v, class_history_entry[k])
 
         # It is now expected that the range in the first interval will end with
@@ -764,7 +797,7 @@ class HistoryTableTests(TransactionTestCase):
         project_history_entry = new_project_history[-1][0]
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(project_details):
+        for k,v in project_details.items():
             self.assertEqual(v, project_history_entry[k])
 
         # It is now expected that the range in the first interval will end with
@@ -1065,9 +1098,9 @@ class HistoryTableTests(TransactionTestCase):
         class_2_history_entry = class_history[-1][0] #newer
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(class_details):
+        for k,v in class_details.items():
             self.assertEqual(v, class_1_history_entry[k])
-        for k,v in six.iteritems(class_2_details):
+        for k,v in class_2_details.items():
             self.assertEqual(v, class_2_history_entry[k])
 
         # It is now expected that the range of the history interval will end with
@@ -1144,9 +1177,9 @@ class HistoryTableTests(TransactionTestCase):
         project_2_history_entry = truncate_history[-1][0] #newer
 
         # Expect all fields of the original table to match the history table
-        for k,v in six.iteritems(project_details):
+        for k,v in project_details.items():
             self.assertEqual(v, project_1_history_entry[k])
-        for k,v in six.iteritems(project_2_details):
+        for k,v in project_2_details.items():
             self.assertEqual(v, project_2_history_entry[k])
 
         # It is now expected that the range of the history interval will end with
@@ -1200,7 +1233,7 @@ class HistoryTableTests(TransactionTestCase):
         self.assertEqual(len(after_insert_history_view),
             len(original_class_history_view) + 1)
         last_view_entry = after_insert_history_view[-1][0]
-        for k, v in six.iteritems(class_details):
+        for k, v in class_details.items():
             self.assertEqual(v, last_view_entry[k])
 
         # Update row in new transaction (to have new timestamp)
@@ -1218,10 +1251,10 @@ class HistoryTableTests(TransactionTestCase):
         self.assertEqual(len(after_update_history_view),
             len(after_insert_history_view) + 1)
         last_view_entry = after_update_history_view[-1][0]
-        for k, v in six.iteritems(updated_class_details):
+        for k, v in updated_class_details.items():
             self.assertEqual(v, last_view_entry[k])
         second_last_view_entry = after_update_history_view[-2][0]
-        for k, v in six.iteritems(class_details):
+        for k, v in class_details.items():
             self.assertEqual(v, second_last_view_entry[k])
 
     def test_history_table_creation_no_primary_key(self):
@@ -1280,7 +1313,7 @@ class HistoryTableTests(TransactionTestCase):
         attr_result = [r[0] for r in cursor.fetchall()]
         expected_cols = ['id', 'name', 'sys_period', 'exec_transaction_id']
 
-        six.assertCountEqual(self, attr_result, expected_cols)
+        self.assertCountEqual(attr_result, expected_cols)
 
         cursor.execute("""
             SELECT drop_history_table('_history_test_'::regclass);

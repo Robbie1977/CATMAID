@@ -1,0 +1,5 @@
+django/static/*
+django/configuration.py
+django/projects/mysite/django.wsgi
+django/projects/mysite/settings.py
+sphinx-doc/build/*

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 import yaml
 
 from django import forms
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
 from django.db.models import fields as db_fields, ForeignKey
 from django.core.exceptions import ValidationError
 from django.contrib import admin, messages
@@ -14,18 +13,21 @@ from django.contrib.auth.admin import UserAdmin, GroupAdmin
 from django.contrib.auth.models import User, Group
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
+from django.urls import reverse
 from guardian.admin import GuardedModelAdmin
 from catmaid.models import (Project, DataView, Stack, InterpolatableSection,
         ProjectStack, UserProfile, BrokenSlice, StackClassInstance, Relation,
-        ClassInstance, Class, StackGroup, StackStackGroup, StackMirror)
+        ClassInstance, Class, StackGroup, StackStackGroup, StackMirror,
+        PointCloud, GroupInactivityPeriod, GroupInactivityPeriodContact)
 from catmaid.control.importer import importer_admin_view
 from catmaid.control.classificationadmin import classification_admin_view
 from catmaid.control.annotationadmin import ImportingWizard
 from catmaid.control.project import (delete_projects_and_stack_data,
-        export_project_data)
+        delete_projects, export_project_data)
 from catmaid.views import (UseranalyticsView, UserProficiencyView,
         GroupMembershipHelper)
 from catmaid.views.dvid import DVIDImportWizard
+from catmaid.views.userimporter import UserImportWizard
 
 
 def add_related_field_wrapper(form, col_name, rel=None):
@@ -99,6 +101,17 @@ def delete_projects_plus_stack_data(modeladmin, request, queryset):
 delete_projects_plus_stack_data.short_description = "Delete selected incl. linked stack data"
 
 
+def delete_projects_and_data(modeladmin, request, queryset):
+    """An action that expects a list of projects as queryset that will be
+    deleted along with all data that reference it (e.g. treenodes, volumes,
+    ontologies). A confirmation page will be shown.
+    """
+    project_ids = list(map(str, queryset.values_list('id', flat=True)))
+    return HttpResponseRedirect(reverse("catmaid:delete-projects-with-data") +
+            "?ids={}".format(",".join(project_ids)))
+delete_projects_and_data.short_description = "Delete selected"
+
+
 class BrokenSliceModelForm(forms.ModelForm):
     """ This model form for the BrokenSlide model, will add an optional "last
     index" field. BrokenSliceAdmin will deactivate it, when an existing
@@ -146,7 +159,7 @@ class GroupAdminForm(forms.ModelForm):
             group.save()
 
         if group.pk:
-            group.user_set = self.cleaned_data['users']
+            group.user_set.set(self.cleaned_data['users'])
             self.save_m2m()
 
         return group
@@ -254,12 +267,26 @@ class ProjectAdmin(GuardedModelAdmin):
     search_fields = ['title','comment']
     inlines = [ProjectStackInline]
     save_as = True
-    actions = (duplicate_action, delete_projects_plus_stack_data,
-            export_project_json_action, export_project_yaml_action)
+    actions = (delete_projects_and_data, delete_projects_plus_stack_data,
+            duplicate_action, export_project_json_action,
+            export_project_yaml_action)
+
+    def get_actions(self, request):
+        """Disable default delete action.
+        """
+        actions = super().get_actions(request)
+        if 'delete_selected' in actions:
+            del actions['delete_selected']
+        return actions
+
+
+class PointCloudAdmin(GuardedModelAdmin):
+    search_fields = ['name','description']
+    save_as = True
 
 
 class StackAdmin(GuardedModelAdmin):
-    list_display = ('title', 'dimension', 'resolution', 'num_zoom_levels')
+    list_display = ('title', 'dimension', 'resolution',)
     search_fields = ['title', 'comment']
     inlines = [ProjectStackInline, StackStackGroupInline, StackMirrorInline]
     save_as = True
@@ -291,8 +318,9 @@ class StackMirrorAdmin(GuardedModelAdmin):
     actions = (duplicate_action,)
 
 class DataViewConfigWidget(forms.widgets.Textarea):
-    def render(self, name, value, attrs=None):
-        output = super(DataViewConfigWidget, self).render(name, value, attrs)
+    def render(self, name, value, attrs=None, renderer=None):
+        output = super(DataViewConfigWidget, self).render(name, value, attrs,
+                renderer)
         output += "<p id='data_view_config_help' class='help'></p>"
         return mark_safe(output)
 
@@ -364,8 +392,20 @@ class ProfileInline(admin.StackedInline):
         return super(ProfileInline, self).get_formset(request, obj, **kwargs)
 
 
+class GroupInactivityPeriodContactUserInline(admin.StackedInline):
+    model = GroupInactivityPeriodContact
+    fk_name = 'user'
+    max_num = 1
+
+
+class GroupInactivityPeriodContactGroupInline(admin.StackedInline):
+    model = GroupInactivityPeriodContact
+    fk_name = 'inactivity_period'
+    max_num = 1
+
+
 class CustomUserAdmin(UserAdmin):
-    inlines = [ProfileInline]
+    inlines = [ProfileInline, GroupInactivityPeriodContactUserInline]
     list_display = ('username', 'email', 'first_name', 'last_name', 'is_staff')
     filter_horizontal = ('groups', 'user_permissions')
 
@@ -386,6 +426,14 @@ class UserSetInline(admin.TabularInline):
 class CustomGroupAdmin(GroupAdmin):
     form = GroupAdminForm
     list_filter = ('name',)
+
+
+class GroupInactivityPeriodAdmin(admin.ModelAdmin):
+    model = GroupInactivityPeriod
+    list_display = ('group', 'max_inactivity', 'message', 'comment')
+    list_filter = ('group', 'max_inactivity', 'message', 'comment')
+    inlines = [GroupInactivityPeriodContactGroupInline]
+
 
 def color(self):
     try:
@@ -408,10 +456,12 @@ admin.site.register(Stack, StackAdmin)
 admin.site.register(StackGroup, StackGroupAdmin)
 admin.site.register(ProjectStack, ProjectStackAdmin)
 admin.site.register(StackMirror, StackMirrorAdmin)
+admin.site.register(PointCloud, PointCloudAdmin)
 
 # Replace the user admin view with custom view
 admin.site.register(User, CustomUserAdmin)
 admin.site.register(Group, CustomGroupAdmin)
+admin.site.register(GroupInactivityPeriod, GroupInactivityPeriodAdmin)
 # Register additional views
 admin.site.register_view('annotationimporter', 'Import annotations and tracing data',
                          view=ImportingWizard.as_view())
@@ -430,3 +480,5 @@ admin.site.register_view('groupmembershiphelper',
                          view=GroupMembershipHelper.as_view())
 admin.site.register_view('dvidimporter', 'Import DVID stacks',
                          view=DVIDImportWizard.as_view())
+admin.site.register_view('userimporter', 'Import users',
+                         view=UserImportWizard.as_view())

@@ -13,6 +13,9 @@
     this.annotation_ids = {};
     this.annotation_names = {};
 
+    // Remember the time of the last update
+    this.lastUpdate = null;
+
     // Listen to annotation deletions so these annotations can be removed from
     // the cache.
     CATMAID.Annotations.on(CATMAID.Annotations.EVENT_ANNOTATIONS_DELETED,
@@ -44,20 +47,41 @@
     return Object.keys(this.annotation_names);
   };
 
-  AnnotationCache.prototype.update = function(callback) {
-    return CATMAID.fetch(project.id + '/annotations/', 'POST', {})
-      .then((function(json) {
-        // Empty cache
-        this.annotation_ids = {};
-        this.annotation_names = {};
-        // Populate cache
-        json.annotations.forEach(function (a) {
-         this.annotation_ids[a.name] = a.id;
-         this.annotation_names[a.id] = a.name;
-        }, this);
-        // Call back, if requested
-        CATMAID.tools.callIfFn(callback);
-      }).bind(this));
+  /**
+   * Update the annotation cache.
+   *
+   * @param {Boolean} parallel If true, the update request will be queued
+                               separately from all other reuquests.
+   * @param {boolean} force    If the cache should be updated, even if no new
+   *                           data since the last update can be found.
+   */
+  AnnotationCache.prototype.update = function(parallel, force) {
+    return CATMAID.fetch({
+        url: project.id + '/annotations/',
+        data: {
+          simple: true,
+          if_modified_since: (force || !this.lastUpdate) ?
+              undefined : this.lastUpdate.toISOString(),
+        },
+        parallel: parallel,
+        supportedStatus: [304],
+        details: true,
+      })
+      .then(response => {
+        // Only update local cache if there is new data.
+        if (response.status !== 304) {
+          // Empty cache
+          this.annotation_ids = {};
+          this.annotation_names = {};
+          // Populate cache
+          response.data.annotations.forEach(a => {
+           this.annotation_ids[a.name] = a.id;
+           this.annotation_names[a.id] = a.name;
+          });
+
+          this.lastUpdate = new Date();
+        }
+      });
   };
 
   /**

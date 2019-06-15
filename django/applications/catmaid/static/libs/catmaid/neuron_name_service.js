@@ -54,6 +54,9 @@
       // Whether empty components should be trimmed
       var autoTrimEmptyValues = true;
 
+      // Whether neighboring duplicate components should be removed.
+      var removeDuplicates = true;
+
       // An object mapping skeleton IDs to objects that contain the current name and
       // a list of clients, interested in the particular skeleton.
       var managedSkeletons = {};
@@ -89,6 +92,9 @@
                     },
                     auto_trim_empty: {
                       default: true
+                    },
+                    remove_neighboring_duplicates: {
+                      default: true
                     }
                   },
                   migrations: {}
@@ -99,6 +105,7 @@
             componentList = $.extend(true, [], CATMAID.NeuronNameService.Settings[scope].component_list);
             formatString = CATMAID.NeuronNameService.Settings[scope].format_string;
             autoTrimEmptyValues = CATMAID.NeuronNameService.Settings[scope].auto_trim_empty;
+            removeDuplicates = CATMAID.NeuronNameService.Settings[scope].remove_neighboring_duplicates;
             this.refresh();
           }).bind(this);
 
@@ -148,6 +155,25 @@
         getAutoTrimEmpty: function()
         {
           return autoTrimEmptyValues;
+        },
+
+        /**
+         * Mutator for the duplicate removal setting for the format string replacement.
+         */
+        setRemoveDuplicates: function(remove)
+        {
+          removeDuplicates = remove;
+
+          // Update the name representation of all neurons
+          this.refresh();
+        },
+
+        /**
+         * Accessor for the duplicate removal setting.
+         */
+        getRemoveDuplicates: function()
+        {
+          return removeDuplicates;
         },
 
         /**
@@ -235,6 +261,15 @@
           var models = {};
           models[model.id] = model;
           return this.registerAll(client, models, callback);
+        },
+
+        registerAllFromList: function(client, skeletonIds)
+        {
+          let models = skeletonIds.reduce((o, skid) => {
+            o[skid] = new CATMAID.SkeletonModel(skid);
+            return o;
+          }, {});
+          return this.registerAll(client, models);
         },
 
         /**
@@ -417,7 +452,7 @@
           /**
            * The actual update function---see below for call.
            */
-          var update = function(data, resolve, reject) {
+          var update = function(skidsToUpdate, data, resolve, reject) {
             var name = function(skid) {
               /**
                * Support function to creat a label, based on meta annotations. Id a
@@ -516,7 +551,7 @@
                 delimiter = delimiter === undefined ? ", " : delimiter;
 
                 if (component === 'f') {
-                  return fallbackValue.join(delimiter);
+                  return fallbackValue ? fallbackValue.join(delimiter) : fallbackValue;
                 }
 
                 var index = parseInt(component, 10);
@@ -526,27 +561,39 @@
                 } else return match;
               };
 
-              // If auto-trim is enabled, remove all null values and spaces
-              // around it.
-              if (CATMAID.NeuronNameService.Settings.session.auto_trim_empty) {
-                // Split format string in format components and regular
-                // components.
-                var components = formatString.split(/((?:%f|%\d+)(?:\{.*\})?)/g);
-                var lastComponentIndex = components.length - 1;
-                var leftTrimmed = false;
-                var rightTrimmed = false;
-                components = components.map(function(c) {
-                  return c.replace(componentsRegEx, replace);
-                }).map(function(c, i, mappedComponents) {
+              var removeDuplicates = CATMAID.NeuronNameService.Settings.session.remove_neighboring_duplicates;
+              var autoTrim = CATMAID.NeuronNameService.Settings.session.auto_trim_empty;
+
+              // Split format string in format components and regular
+              // components.
+              var components = formatString.split(/((?:%f|%\d+)(?:\{.*\})?)/g);
+              var lastComponentIndex = components.length - 1;
+              var leftTrimmed = false;
+              var rightTrimmed = false;
+              var lastMappedElement = null;
+              components = components.map(function(c) {
+                return c.replace(componentsRegEx, replace);
+              }).filter(function(c, i, mappedComponents) {
+                if (removeDuplicates) {
+                  if (c.trim().length !== 0) {
+                    if (lastMappedElement === c) {
+                      return false;
+                    }
+                    lastMappedElement = c;
+                  }
+                }
+                return true;
+              }).map(function(c, i, mappedComponents) {
+                // Left trim current component if last component is empty. If
+                // the the name is not empty and if a right-trim operation
+                // happend for the last non-empty element or a left trim
+                // operation happend on the current element, retain one space.
+                if (autoTrim) {
                   // Empty elements don't need any trimming.
                   if (c.length === 0) {
                     return c;
                   }
 
-                  // Left trim current component if last component is empty. If
-                  // the the name is not empty and if a right-trim operation
-                  // happend for the last non-empty element or a left trim
-                  // operation happend on the current element, retain one space.
                   if (i > 0) {
                     var l = c.length;
                     var lastComponent = mappedComponents[i - 1];
@@ -561,6 +608,16 @@
                     }
                   }
 
+                  // Add a single space if there just happened a trim to the
+                  // right just before a new left trim action. This indicates an
+                  // enclosed missing mapped component. Not doing this results
+                  // in the neighboring elements being squashed together. Since
+                  // we need to access the past right trimming information, this
+                  // is done before this information is updated.
+                  if (leftTrimmed && rightTrimmed) {
+                     c = c + ' ';
+                  }
+
                   // Right-trim current component, if next components is empty
                   if (i < lastComponentIndex) {
                     var l = c.length;
@@ -572,16 +629,22 @@
                       rightTrimmed = false;
                     }
                   }
+                }
 
-                  return c;
-                });
-                return components.join('');
-              } else {
-                return formatString.replace(componentsRegEx, replace);
-              }
+                return c;
+              });
+              return components.join('');
             };
 
-            if (skids) {
+            if (skidsToUpdate) {
+              skidsToUpdate.forEach(function(skid) {
+                // Ignore unknown skeletons
+                if (!managedSkeletons[skid]) {
+                  return;
+                }
+                managedSkeletons[skid].name = name(skid);
+              });
+            } else if (skids) {
               skids.forEach(function(skid) {
                 // Ignore unknown skeletons
                 if (!managedSkeletons[skid]) {
@@ -596,10 +659,8 @@
             }
 
             // Resolve the promise and execute callback, if any
-            resolve();
-            if (callback) {
-              callback();
-            }
+            if (resolve) resolve();
+            if (callback) callback();
           };
 
           // Request information only, if needed
@@ -618,7 +679,7 @@
             if (needsNoBackend || 0 === querySkids.length) {
               // If no back-end is needed, call the update method right away, without
               // any data.
-              update(null, resolve, reject);
+              update(null, null, resolve, reject);
             } else {
               // Check if we need meta annotations
               var needsMetaAnnotations = componentList.some(function(l) {
@@ -629,16 +690,47 @@
                   return 'neuronname' === l.id;
               });
 
-              // Get all data that is needed for the component list
-              return CATMAID.fetch(project.id + '/skeleton/annotationlist', 'POST', {
-                  skeleton_ids: querySkids,
-                  metaannotations: needsMetaAnnotations ? 1 : 0,
-                  neuronnames: needsNeueonNames ? 1 : 0,
-                })
-                .then(function(result) {
-                  update(result, resolve, reject);
-                })
-                .catch(CATMAID.handleError);
+              let queryModels = querySkids.map(skid => managedSkeletons[skid].model);
+
+              // Sort queries by API
+              let querySkidsByAPI = querySkids.reduce((o, s) => {
+                let entry = managedSkeletons[s];
+                let key = entry && entry.model ? (entry.model.api || undefined) : undefined;
+                let apiModels = o.get(key);
+                if (!apiModels) {
+                  apiModels = [];
+                  o.set(key, apiModels);
+                }
+                apiModels.push(s);
+                return o;
+              }, new Map());
+
+              let promiseAnnotations = [];
+              for (let [api, apiSkids] of querySkidsByAPI) {
+                // Try to find the first attached project ID for the this API.
+                // We assue it is the same for all skeletons from this API.
+                // TODO: There has to be a better way to do this.
+                let managedSkeleton = managedSkeletons[apiSkids[0]];
+                let projectId = project.id;
+                if (managedSkeleton && managedSkeleton.model && managedSkeleton.model.projectId !== undefined) {
+                  projectId = managedSkeleton.model.projectId;
+                }
+                promiseAnnotations.push(
+                    CATMAID.fetch({
+                      url: projectId + '/skeleton/annotationlist',
+                      method: 'POST',
+                      data: {
+                        skeleton_ids: apiSkids,
+                        metaannotations: needsMetaAnnotations ? 1 : 0,
+                        neuronnames: needsNeueonNames ? 1 : 0,
+                      },
+                      api: api,
+                    }).then(result => update(apiSkids, result)));
+              }
+
+              return Promise.all(promiseAnnotations)
+                .then(resolve)
+                .catch(reject);
             }
           });
         },

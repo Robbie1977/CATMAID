@@ -29,7 +29,7 @@ interface and suite of analysis tools which interact with the backend's HTTP
 API. The frontend also has its own APIs which allow new tools to be quickly
 constructed or expert users to perform novel analysis using the browser console.
 
-The backend is written primarily in Python 2.7 using the Django web framework.
+The backend is written primarily in Python 3.6 using the Django web framework.
 Annotations and metadata about stacks are stored in a PostgreSQL database. Most
 endpoints in the backend API expect and return JSON.
 
@@ -374,6 +374,14 @@ example, with the default configuration this would be::
 ... or, for custom configurations::
 
     http://<catmaid_servername>/<catmaid_subdirectory>/tests
+
+Alternatively, the front-end tests can be run in a terminal (as it is done in
+our CI setup). To do so, first a few dependencies have to be installed and then
+`karma` is used to execute the tests from the CATMAID root directory::
+
+    cd /<path_to_catmaid_install>
+    npm install --only=dev
+    karma start karma.conf.js
 
 Documentation
 -------------

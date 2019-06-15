@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
-import json
 
 from collections import defaultdict
+import json
+from typing import Any, DefaultDict, List, Optional, Union
 
 from django.db import connection
-from django.http import Http404, JsonResponse
+from django.http import HttpRequest, Http404, JsonResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 
 from rest_framework.decorators import api_view
@@ -16,6 +16,7 @@ from catmaid.models import Project, Class, ClassInstance, Relation, Connector, \
         ChangeRequest
 from catmaid.control.authentication import (requires_user_role, can_edit_or_fail,
         PermissionError)
+from catmaid.control.common import get_request_bool
 from catmaid.fields import Double3D
 
 
@@ -28,7 +29,7 @@ single skeleton. This is only used to generate warnings, not enforced.
 """
 
 
-def get_link_model(node_type):
+def get_link_model(node_type:str) -> Union[ConnectorClassInstance, TreenodeClassInstance]:
     """ Return the model class that represents the a label link for nodes of
     the given node type.
     """
@@ -39,8 +40,8 @@ def get_link_model(node_type):
     else:
         raise Exception('Unknown node type: "%s"', node_type)
 
-@requires_user_role([UserRole.Annotate, UserRole.Browse])
-def label_remove(request, project_id=None):
+@requires_user_role(UserRole.Annotate)
+def label_remove(request:HttpRequest, project_id=None) -> JsonResponse:
     label_id = int(request.POST['label_id'])
     if request.user.is_superuser:
         try:
@@ -63,8 +64,8 @@ def label_remove(request, project_id=None):
     raise PermissionError('Only super users can delete unreferenced labels')
 
 @api_view(['GET'])
-@requires_user_role([UserRole.Annotate, UserRole.Browse])
-def labels_all(request, project_id=None):
+@requires_user_role(UserRole.Browse)
+def labels_all(request:HttpRequest, project_id=None) -> JsonResponse:
     """List all labels (front-end node *tags*) in use.
 
     ---
@@ -79,13 +80,57 @@ def labels_all(request, project_id=None):
       description: Labels used in this project
       required: true
     """
-    labels = list(ClassInstance.objects.filter(class_column__class_name='label',
-        project=project_id).values_list('name', flat=True))
-    return JsonResponse(labels, safe=False)
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT COALESCE(json_agg(name ORDER BY name), '[]'::json)::text
+        FROM class_instance
+        WHERE project_id = %(project_id)s
+        AND class_id = (
+            SELECT id
+            FROM class
+            WHERE class_name = 'label'
+            AND project_id = %(project_id)s
+        )
+    """, {
+        'project_id': project_id,
+    })
+    return HttpResponse(cursor.fetchone()[0], content_type='text/json')
 
 @api_view(['GET'])
 @requires_user_role(UserRole.Browse)
-def get_label_stats(request, project_id=None):
+def labels_all_detail(request:HttpRequest, project_id=None) -> JsonResponse:
+    """List all labels (front-end node *tags*) in use alongside their IDs.
+    ---
+    parameters:
+    - name: project_id
+      description: Project containing node of interest
+      required: true
+    type:
+    - type: array
+      items:
+        type: string
+      description: Labels used in this project
+      required: true
+    """
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT COALESCE(json_agg(json_build_object('id', id, 'name', name) ORDER BY name), '[]'::json)::text
+        FROM class_instance
+        WHERE project_id = %(project_id)s
+        AND class_id = (
+            SELECT id
+            FROM class
+            WHERE class_name = 'label'
+            AND project_id = %(project_id)s
+        )
+    """, {
+        'project_id': project_id,
+    })
+    return HttpResponse(cursor.fetchone()[0], content_type='text/json')
+
+@api_view(['GET'])
+@requires_user_role(UserRole.Browse)
+def get_label_stats(request:HttpRequest, project_id=None) -> JsonResponse:
     """Get usage statistics of node labels.
 
     ---
@@ -120,8 +165,8 @@ def get_label_stats(request, project_id=None):
     return JsonResponse(cursor.fetchall(), safe=False)
 
 @api_view(['GET'])
-@requires_user_role([UserRole.Annotate, UserRole.Browse])
-def labels_for_node(request, project_id=None, node_type=None, node_id=None):
+@requires_user_role(UserRole.Browse)
+def labels_for_node(request:HttpRequest, project_id=None, node_type:Optional[str]=None, node_id=None) -> JsonResponse:
     """List all labels (front-end node *tags*) attached to a particular node.
 
     ---
@@ -136,7 +181,7 @@ def labels_for_node(request, project_id=None, node_type=None, node_id=None):
       description: ID of node to list labels for
       required: true
     type:
-    - type: arry
+    - type: array
       items:
         type: string
       description: Labels used on a particular node
@@ -159,13 +204,13 @@ def labels_for_node(request, project_id=None, node_type=None, node_id=None):
 
     return JsonResponse([l.class_instance.name for l in qs], safe=False)
 
-@requires_user_role([UserRole.Annotate, UserRole.Browse])
-def labels_for_nodes(request, project_id=None):
+@requires_user_role(UserRole.Browse)
+def labels_for_nodes(request:HttpRequest, project_id=None) -> JsonResponse:
     # Two POST variables, which are each an array of integers stringed together
     # with commas as separators
     treenode_ids = request.POST.get('treenode_ids', '').strip()
     connector_ids = request.POST.get('connector_ids', '').strip()
-    result = defaultdict(list)
+    result = defaultdict(list) # type: DefaultDict[Any, List]
     cursor = connection.cursor()
 
     if treenode_ids:
@@ -199,15 +244,15 @@ def labels_for_nodes(request, project_id=None):
     return JsonResponse(result)
 
 @requires_user_role(UserRole.Annotate)
-def label_update(request, project_id=None, location_id=None, ntype=None):
+def label_update(request:HttpRequest, project_id, location_id, ntype:str) -> JsonResponse:
     """ location_id is the ID of a treenode or connector.
         ntype is either 'treenode' or 'connector'. """
     labeled_as_relation = Relation.objects.get(project=project_id, relation_name='labeled_as')
     p = get_object_or_404(Project, pk=project_id)
 
-    # TODO will FAIL when a tag contains a coma by itself
+    # TODO will FAIL when a tag contains a comma by itself
     new_tags = request.POST['tags'].split(',')
-    delete_existing_labels = request.POST.get('delete_existing', 'true') == 'true'
+    delete_existing_labels = get_request_bool(request.POST, 'delete_existing', True)
 
     kwargs = {'relation': labeled_as_relation,
               'class_instance__class_column__class_name': 'label'}
@@ -362,7 +407,7 @@ def label_update(request, project_id=None, location_id=None, ntype=None):
     return JsonResponse(response)
 
 
-def label_exists(label_id, node_type):
+def label_exists(label_id, node_type) -> bool:
     # This checks to see if the exact instance of the tag being applied to a node/connector still exists.
     # If the tag was removed and added again then this will return False.
     table = get_link_model(node_type)
@@ -373,7 +418,7 @@ def label_exists(label_id, node_type):
         return False
 
 @requires_user_role(UserRole.Annotate)
-def remove_label_link(request, project_id, ntype, location_id):
+def remove_label_link(request:HttpRequest, project_id, ntype:str, location_id) -> JsonResponse:
     label = request.POST.get('tag', None)
     if not label:
         raise ValueError("No label parameter given")
@@ -401,7 +446,7 @@ def remove_label_link(request, project_id, ntype, location_id):
             'error': 'Could not remove label'
         })
 
-def remove_label(label_id, node_type):
+def remove_label(label_id, node_type:str) -> bool:
     # This removes an exact instance of a tag being applied to a node/connector, it does not look up the tag by name.
     # If the tag was removed and added again then this will do nothing and the tag will remain.
     table = get_link_model(node_type)

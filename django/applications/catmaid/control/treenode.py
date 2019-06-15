@@ -1,42 +1,42 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
+from collections import defaultdict
 import itertools
 import math
 import networkx as nx
 import re
-import six
-
-from collections import defaultdict
+from typing import Any, DefaultDict, Dict, List, Union
 
 from django.db import connection
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 
 from rest_framework.decorators import api_view
 
 from catmaid import state
 from catmaid.models import UserRole, Treenode, ClassInstance, \
-        TreenodeConnector, Location
+        TreenodeConnector, Location, SamplerInterval
 from catmaid.control.authentication import requires_user_role, \
         can_edit_class_instance_or_fail, can_edit_or_fail
-from catmaid.control.common import get_relation_to_id_map, \
-        get_class_to_id_map, insert_into_log, _create_relation, get_request_list
+from catmaid.control.common import (get_relation_to_id_map,
+        get_class_to_id_map, insert_into_log, _create_relation,
+        get_request_bool, get_request_list)
 from catmaid.control.neuron import _delete_if_empty
 from catmaid.control.node import _fetch_location, _fetch_locations
 from catmaid.control.link import create_connector_link
 from catmaid.util import Point3D, is_collinear
 
 
-def can_edit_treenode_or_fail(user, project_id, treenode_id):
+def can_edit_treenode_or_fail(user, project_id, treenode_id) -> bool:
     """ Tests if a user has permissions to edit the neuron which the skeleton of
-    the treenode models."""
+    the treenode models. Will return true or throw an exception. Cannot return false. """
     info = _treenode_info(project_id, treenode_id)
     return can_edit_class_instance_or_fail(user, info['neuron_id'], 'neuron')
 
 
-def can_edit_skeleton_or_fail(user, project_id, skeleton_id, model_of_relation_id):
-    """Test if a user has permission to edit a neuron modeled by a skeleton."""
+def can_edit_skeleton_or_fail(user, project_id, skeleton_id, model_of_relation_id) -> bool:
+    """Test if a user has permission to edit a neuron modeled by a skeleton. Will return true
+       or throw an exception. Cannot return false."""
     cursor = connection.cursor()
     cursor.execute("""
         SELECT
@@ -58,7 +58,7 @@ def can_edit_skeleton_or_fail(user, project_id, skeleton_id, model_of_relation_i
 
 
 @requires_user_role(UserRole.Annotate)
-def create_treenode(request, project_id=None):
+def create_treenode(request:HttpRequest, project_id=None) -> JsonResponse:
     """
     Add a new treenode to the database
     ----------------------------------
@@ -87,7 +87,7 @@ def create_treenode(request, project_id=None):
             'confidence': 0,
             'useneuron': -1,
             'parent_id': -1}
-    string_values = {}
+    string_values = {} # type: Dict
     for p in float_values.keys():
         params[p] = float(request.POST.get(p, float_values[p]))
     for p in int_values.keys():
@@ -128,7 +128,7 @@ def create_treenode(request, project_id=None):
     })
 
 @requires_user_role(UserRole.Annotate)
-def insert_treenode(request, project_id=None):
+def insert_treenode(request:HttpRequest, project_id=None) -> JsonResponse:
     """
     Create a new treenode between two existing nodes. Its creator and
     creation_date information will be set to information of child node. No node
@@ -136,7 +136,7 @@ def insert_treenode(request, project_id=None):
     node.
     """
     # Use creation time, if part of parameter set
-    params = {}
+    params = {} # type: Dict[str, float]
     float_values = {
         'x': 0,
         'y': 0,
@@ -213,9 +213,9 @@ def insert_treenode(request, project_id=None):
     # Update parent of child to new treenode, do this in raw SQL to also get the
     # updated edition time Update also takeover children
     cursor = connection.cursor()
-    params = [new_treenode.treenode_id, child.id]
+    paramlist = [new_treenode.treenode_id, child.id]
     if takeover_child_ids:
-        params.extend(takeover_child_ids)
+        paramlist.extend(takeover_child_ids)
         child_template = ",".join(("%s",) * (len(takeover_child_ids) + 1))
     else:
         child_template = "%s"
@@ -224,9 +224,9 @@ def insert_treenode(request, project_id=None):
         UPDATE treenode SET parent_id = %s
          WHERE id IN ({})
      RETURNING id, edition_time
-    """.format(child_template), params)
+    """.format(child_template), paramlist)
     result = cursor.fetchall()
-    if not result or (len(params) - 1) != len(result):
+    if not result or (len(paramlist) - 1) != len(result):
         raise ValueError("Couldn't update parent of inserted node's child: " + child.id)
     child_edition_times = [[k,v] for k,v in result]
 
@@ -258,7 +258,7 @@ class NewTreenode(object):
         self.parent_edition_time = parent_edition_time
 
 def _create_treenode(project_id, creator, editor, x, y, z, radius, confidence,
-                     neuron_id, parent_id, creation_time=None, neuron_name=None):
+                     neuron_id, parent_id, creation_time=None, neuron_name=None) -> NewTreenode:
 
     relation_map = get_relation_to_id_map(project_id)
     class_map = get_class_to_id_map(project_id)
@@ -278,9 +278,11 @@ def _create_treenode(project_id, creator, editor, x, y, z, radius, confidence,
         new_treenode.location_x = float(x)
         new_treenode.location_y = float(y)
         new_treenode.location_z = float(z)
-        new_treenode.radius = int(radius)
+        new_radius = int(radius if (radius and not math.isnan(radius)) else 0)
+        new_treenode.radius = new_radius
         new_treenode.skeleton_id = skeleton_id
-        new_treenode.confidence = int(confidence)
+        new_confidence = int(confidence if not math.isnan(confidence) and (confidence or confidence is 0) else 5)
+        new_treenode.confidence = new_confidence
         if parent_id:
             new_treenode.parent_id = parent_id
         new_treenode.save()
@@ -381,7 +383,7 @@ def _create_treenode(project_id, creator, editor, x, y, z, radius, confidence,
 
                         # Increment substitution values based on existing neurons.
                         for n in matching_neurons:
-                            for i, (count, g) in enumerate(zip(counts, name_pattern.search(n.name).groups())):
+                            for i, (count, g) in enumerate(zip(counts, name_pattern.search(n.name).groups())): # type: ignore
                                 if count == int(g):
                                     counts[i] = count + 1
 
@@ -425,7 +427,7 @@ def _create_treenode(project_id, creator, editor, x, y, z, radius, confidence,
 
 
 @requires_user_role(UserRole.Annotate)
-def update_parent(request, project_id=None, treenode_id=None):
+def update_parent(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     treenode_id = int(treenode_id)
     parent_id = int(request.POST.get('parent_id', -1))
 
@@ -452,7 +454,7 @@ def update_parent(request, project_id=None, treenode_id=None):
         'skeleton_id': child.skeleton_id
     })
 
-def update_node_radii(node_ids, radii, cursor=None):
+def update_node_radii(node_ids, radii, cursor=None) -> Dict:
     """Update radius of a list of nodes, returns old radii.
 
     Both lists/tupples and single values can be supplied.
@@ -506,11 +508,11 @@ def update_node_radii(node_ids, radii, cursor=None):
     } for r in updated_rows}
 
 @requires_user_role(UserRole.Annotate)
-def update_radii(request, project_id=None):
+def update_radii(request:HttpRequest, project_id=None) -> JsonResponse:
     """Update the radius of one or more nodes"""
-    treenode_ids = [int(v) for k,v in six.iteritems(request.POST) \
+    treenode_ids = [int(v) for k,v in request.POST.items() \
         if k.startswith('treenode_ids[')]
-    radii = [float(v) for k,v in six.iteritems(request.POST) \
+    radii = [float(v) for k,v in request.POST.items() \
         if k.startswith('treenode_radii[')]
     # Make sure the back-end is in the expected state
     cursor = connection.cursor()
@@ -525,7 +527,7 @@ def update_radii(request, project_id=None):
     })
 
 @requires_user_role(UserRole.Annotate)
-def update_radius(request, project_id=None, treenode_id=None):
+def update_radius(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     treenode_id = int(treenode_id)
     radius = float(request.POST.get('radius', -1))
     if math.isnan(radius):
@@ -536,7 +538,7 @@ def update_radius(request, project_id=None, treenode_id=None):
     state.validate_state(treenode_id, request.POST.get('state'),
             node=True, lock=True, cursor=cursor)
 
-    def create_update_response(updated_nodes, radius):
+    def create_update_response(updated_nodes, radius) -> JsonResponse:
         return JsonResponse({
             'success': True,
             'updated_nodes': updated_nodes,
@@ -557,7 +559,7 @@ def update_radius(request, project_id=None, treenode_id=None):
 
     if 1 == option:
         # Update radius from treenode_id to next branch or end node (included)
-        children = defaultdict(list)
+        children = defaultdict(list) # type: DefaultDict[Any, List]
         for row in cursor.fetchall():
             children[row[1]].append(row[0])
 
@@ -619,7 +621,7 @@ def update_radius(request, project_id=None, treenode_id=None):
 
     if 5 == option:
         # Update radius of all nodes (in a single query)
-        skeleton_id = Treenode.objects.filter(pk=treenode_id).values('skeleton_id')
+        skeleton_id = Treenode.objects.get(pk=treenode_id).skeleton_id
         include = list(Treenode.objects.filter(skeleton_id=skeleton_id) \
                 .values_list('id', flat=True))
 
@@ -628,7 +630,7 @@ def update_radius(request, project_id=None, treenode_id=None):
 
 
 @requires_user_role(UserRole.Annotate)
-def delete_treenode(request, project_id=None):
+def delete_treenode(request:HttpRequest, project_id=None) -> JsonResponse:
     """ Deletes a treenode. If the skeleton has a single node, deletes the
     skeleton and its neuron. Returns the parent_id, if any."""
     treenode_id = int(request.POST.get('treenode_id', -1))
@@ -650,11 +652,43 @@ def delete_treenode(request, project_id=None):
             treenode_id=treenode_id).values_list('id', 'relation_id',
             'connector_id', 'confidence'))
 
+    # Prevent deletion if node is referenced from sampler or sampler domain. The
+    # deletion would fail regardless, but this way we can provide a nicer error
+    # message.
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT
+            EXISTS(
+                SELECT 1 FROM catmaid_samplerinterval
+                WHERE project_id = %(project_id)s AND
+                    (start_node_id = %(treenode_id)s OR end_node_id = %(treenode_id)s)),
+            EXISTS(
+                SELECT 1 FROM catmaid_samplerdomain
+                WHERE project_id = %(project_id)s AND
+                    (start_node_id = %(treenode_id)s)),
+            EXISTS(
+                SELECT 1 FROM catmaid_samplerdomainend
+                WHERE end_node_id = %(treenode_id)s)
+    """, {
+        'project_id': project_id,
+        'treenode_id': treenode_id,
+    })
+    sampler_refs = cursor.fetchone()
+    has_sampler_interval_refs = sampler_refs[0]
+    has_sampler_domain_refs = sampler_refs[1] or sampler_refs[2]
+
+    if has_sampler_interval_refs:
+        raise ValueError("Can't delete node, it is used in at least one sampler interval")
+    if has_sampler_domain_refs:
+        raise ValueError("Can't delete node, it is used in at least one sampler domain")
+
+
     response_on_error = ''
     deleted_neuron = False
+    cursor = connection.cursor()
     try:
         if not parent_id:
-            children = []
+            children = [] # type: List
             # This treenode is root.
             response_on_error = 'Could not retrieve children for ' \
                 'treenode #%s' % treenode_id
@@ -702,7 +736,6 @@ def delete_treenode(request, project_id=None):
             # Treenode is not root, it has a parent and perhaps children.
             # Reconnect all the children to the parent.
             response_on_error = 'Could not update parent id of children nodes'
-            cursor = connection.cursor()
             cursor.execute("""
                 UPDATE treenode SET parent_id = %s
                 WHERE project_id = %s AND parent_id = %s
@@ -712,8 +745,13 @@ def delete_treenode(request, project_id=None):
             # return as child info.
             children = cursor.fetchall()
 
-        # Remove treenode
+        # Remove treenode. Set the current user name in a transaction local
+        # variable. This is done to communicate the current user to the trigger
+        # that updates the skeleton summary table.
         response_on_error = 'Could not delete treenode.'
+        cursor.execute("SET LOCAL catmaid.user_id=%(user_id)s", {
+            'user_id': request.user.id,
+        })
         Treenode.objects.filter(project_id=project_id, pk=treenode_id).delete()
         return JsonResponse({
             'x': treenode.location_x,
@@ -732,32 +770,96 @@ def delete_treenode(request, project_id=None):
     except Exception as e:
         raise Exception(response_on_error + ': ' + str(e))
 
-def _compact_detail_list(project_id, treenode_ids):
-    """Return a list with information on the passed in node. It has the form:
-    [ID, parent ID, x, y, z, confidence, user_id, radius, skeleton_id, user_id]
+def _compact_detail_list(project_id, treenode_ids=None, label_ids=None,
+        label_names=None, skeleton_ids=None):
     """
+    Return a list with information on the passed in node IDs or on treenodes
+    that match the optional label refrences. The result has the form:
+
+    [ID, parent ID, x, y, z, confidence, radius, skeleton_id, edition_time, user_id]
+
+    The returned edition time is an epoch number.
+    """
+    if not any((treenode_ids, label_ids, label_names, skeleton_ids)):
+        raise ValueError("No treenode IDs, label IDs, label names or skeleton IDs provided")
+
+    extra_joins = []
+    extra_where = []
+
+    if treenode_ids:
+        extra_joins.append("""
+            JOIN UNNEST(%(treenode_ids)s::bigint[]) query(id)
+                ON t.id = query.id
+        """)
+
+    labeled_as = None
+    if label_ids or label_names:
+
+        relation_map = get_relation_to_id_map(project_id, ('labeled_as',))
+        labeled_as = relation_map['labeled_as']
+
+        if label_ids:
+            extra_joins.append("""
+                JOIN treenode_class_instance tci
+                    ON tci.treenode_id = t.id
+                JOIN UNNEST(%(label_ids)s::bigint[]) label(id)
+                    ON label.id = tci.class_instance_id
+            """)
+            extra_where.append("""
+                tci.relation_id = %(labeled_as)s
+            """)
+
+        if label_names:
+            extra_joins.append("""
+                JOIN treenode_class_instance tci
+                    ON tci.treenode_id = t.id
+                JOIN class_instance ci
+                    ON ci.id = tci.class_instance_id
+                JOIN UNNEST(%(label_names)s::text[]) label(name)
+                    ON label.name = ci.name
+            """)
+            extra_where.append("""
+                tci.relation_id = %(labeled_as)s
+            """)
+
+    if skeleton_ids:
+        extra_joins.append("""
+            JOIN UNNEST(%(skeleton_ids)s::bigint[]) skeleton(id)
+                ON skeleton.id = t.skeleton_id
+        """)
+
     cursor = connection.cursor()
     cursor.execute("""
-        SELECT t.id, parent_id, location_x, location_y, location_z, confidence,
-            radius, skeleton_id, EXTRACT(EPOCH FROM edition_time), user_id
+        SELECT t.id, t.parent_id, t.location_x, t.location_y, t.location_z, t.confidence,
+            t.radius, t.skeleton_id,
+            EXTRACT(EPOCH FROM t.edition_time), t.user_id
         FROM treenode t
-        JOIN UNNEST(%(treenode_ids)s::bigint[]) query(id)
-            ON t.id = query.id
-        WHERE project_id=%(project_id)s
-    """, {
+        {extra_joins}
+        WHERE t.project_id=%(project_id)s
+        {extra_where}
+    """.format(**{
+        'extra_joins': '\n'.join(extra_joins),
+        'extra_where': ('AND ' + ' AND\n'.join(extra_where)) if extra_where else '',
+    }), {
         'project_id': project_id,
-        'treenode_ids': treenode_ids
+        'treenode_ids': treenode_ids,
+        'labeled_as': labeled_as,
+        'label_ids': label_ids,
+        'label_names': label_names,
+        'skeleton_ids': skeleton_ids
     })
 
     rows = cursor.fetchall()
-    if len(rows) == 0:
-        raise ValueError("Could not find treenodes")
 
     return rows
 
 def _compact_detail(project_id, treenode_id):
-    """Return a list with information on the passed in node. It has the form:
-    [ID, parent ID, x, y, z, confidence, user_id, radius, skeleton_id, user_id]
+    """
+    Return a list with information on the passed in node. It has the form:
+
+    [ID, parent ID, x, y, z, confidence, radius, skeleton_id, edition_time, user_id]
+
+    The returned edition time is an epoch number.
     """
     cursor = connection.cursor()
     cursor.execute("""
@@ -818,7 +920,7 @@ def _treenode_info(project_id, treenode_id):
 
 @api_view(['GET'])
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def treenode_info(request, project_id=None, treenode_id=None):
+def treenode_info(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     """Retrieve skeleton and neuron information about this treenode.
     ---
     type:
@@ -845,10 +947,14 @@ def treenode_info(request, project_id=None, treenode_id=None):
 
 @api_view(['GET'])
 @requires_user_role(UserRole.Browse)
-def compact_detail(request, project_id=None, treenode_id=None):
-    """Retrieve node information in a compact form. A list of the following form
-    is returned: [ID, parent ID, x, y, z, confidence, user_id, radius,
-    skeleton_id, user_id].
+def compact_detail(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
+    """
+    Retrieve node information in a compact form. A list of the following form
+    is returned:
+
+    [ID, parent ID, x, y, z, confidence, radius, skeleton_id, edition_time, user_id]
+
+    The returned edition time is an epoch number.
     """
     info = _compact_detail(int(project_id), int(treenode_id))
     return JsonResponse(info, safe=False)
@@ -856,20 +962,52 @@ def compact_detail(request, project_id=None, treenode_id=None):
 
 @api_view(['POST'])
 @requires_user_role(UserRole.Browse)
-def compact_detail_list(request, project_id=None):
-    """Retrieve node information in a compact form. A list of elements of the
-    following form is returned: [ID, parent ID, x, y, z, confidence, user_id,
-    radius, skeleton_id, user_id].
+def compact_detail_list(request:HttpRequest, project_id=None) -> JsonResponse:
+    """
+    Retrieve node information in a compact form. A list of elements of the
+    following form is returned:
+
+    [ID, parent ID, x, y, z, confidence, radius, skeleton_id, edition_time, user_id]
+
+    The returned edition time is an epoch number.
+    ---
+    parameters:
+    - name: project_id
+      description: Project to work in
+      required: true
+    - name: treenode_ids
+      description: A list of treeonde IDs to return information on
+      required: false
+    - name: label_ids
+      description: |
+        A list of label IDs that must be linked to result treenodes. Alternative
+        to explicit treenode IDs and label names.
+      required: false
+    - name: label_names
+      description: |
+        A list of label names that must be linked to result treenodes.
+        Alternative to explicit treenode IDs and label IDs
+      required: false
+    - name: skeleton_ids
+      description: |
+        A list of skeleton IDs that result skeletons have to be part of.
+      required: false
     """
     treenode_ids = get_request_list(request.POST, 'treenode_ids', None, int)
-    if not treenode_ids:
-        raise ValueError("No treenode IDs provided")
-    info = _compact_detail_list(int(project_id), treenode_ids)
+    label_ids = get_request_list(request.POST, 'label_ids', None, int)
+    label_names = get_request_list(request.POST, 'label_names')
+    skeleton_ids = get_request_list(request.POST, 'skeleton_ids', None, int)
+    if not any((treenode_ids, label_ids, label_names, skeleton_ids)):
+        raise ValueError("No treenode IDs, label IDs, label names or skeleton IDs provided")
+
+    info = _compact_detail_list(int(project_id), treenode_ids, label_ids,
+            label_names, skeleton_ids)
+
     return JsonResponse(info, safe=False)
 
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def find_children(request, project_id=None, treenode_id=None):
+def find_children(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     try:
         tnid = int(treenode_id)
         cursor = connection.cursor()
@@ -887,7 +1025,7 @@ def find_children(request, project_id=None, treenode_id=None):
 
 @api_view(['POST'])
 @requires_user_role(UserRole.Annotate)
-def update_confidence(request, project_id=None, treenode_id=None):
+def update_confidence(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     """Update confidence of edge between a node to either its parent or its
     connectors.
 
@@ -931,7 +1069,7 @@ def update_confidence(request, project_id=None, treenode_id=None):
     state.validate_state(tnid, request.POST.get('state'),
             node=True, lock=True, cursor=cursor)
 
-    to_connector = request.POST.get('to_connector', 'false') == 'true'
+    to_connector = get_request_bool(request.POST, 'to_connector', False)
     partner_ids = get_request_list(request.POST, 'partner_ids', None, int)
     partner_confidences = get_request_list(request.POST, 'partner_confidences',
             None, int)
@@ -1011,7 +1149,7 @@ def update_confidence(request, project_id=None, treenode_id=None):
     else:
         raise ValueError('Failed to update confidence at treenode %s.' % tnid)
 
-def _skeleton_as_graph(skeleton_id):
+def _skeleton_as_graph(skeleton_id) -> nx.DiGraph:
     # Fetch all nodes of the skeleton
     cursor = connection.cursor()
     cursor.execute('''
@@ -1069,7 +1207,7 @@ def _find_first_interesting_node(sequence):
 
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def find_previous_branchnode_or_root(request, project_id=None, treenode_id=None):
+def find_previous_branchnode_or_root(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     try:
         tnid = int(treenode_id)
         alt = 1 == int(request.POST['alt'])
@@ -1097,7 +1235,7 @@ def find_previous_branchnode_or_root(request, project_id=None, treenode_id=None)
 
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def find_next_branchnode_or_end(request, project_id=None, treenode_id=None):
+def find_next_branchnode_or_end(request:HttpRequest, project_id=None, treenode_id=None) -> JsonResponse:
     try:
         tnid = int(treenode_id)
         skid = Treenode.objects.get(pk=tnid).skeleton_id

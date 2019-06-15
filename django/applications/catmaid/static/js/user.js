@@ -47,6 +47,28 @@
     return User.prototype.users;
   };
 
+  User.list = function(mode) {
+    mode = mode || 'objects';
+
+    let userDb = User.prototype.users;
+    let users = User.sortedIds('login');
+
+    if (mode === 'objects') {
+      for (let i=0; i<users.length; ++i) {
+        users[i] = userDb[users[i]];
+      }
+    } else if (mode === 'id-login') {
+      for (let i=0; i<users.length; ++i) {
+        let u = userDb[users[i]];
+        users[i] = [u.id, u.login];
+      }
+    } else {
+      throw new CATMAID.ValueError("Unknown mode: " + mode);
+    }
+
+    return users;
+  };
+
   /**
    * Return a list of all user IDs, sorted by the given field. If non is given,
    * the full name is used.
@@ -108,8 +130,10 @@
       fn(User.prototype.users[user_id]);
     } else {
       User.getUsers(function() {
-        // Expect it to be there after the update
-        fn(User.prototype.users[user_id]);
+        // Expect it to be there after the update, but use a safe fallback
+        // option, if user information can't be obtained (e.g. because the
+        // anonymous user doesn't haver permission).
+        fn(User.safe_get(user_id));
       });
     }
   };
@@ -159,7 +183,6 @@
       show_text_label_tool: false,
       show_tagging_tool: false,
       show_cropping_tool: false,
-      show_segmentation_tool: false,
       show_tracing_tool: false,
       show_ontology_tool: false,
       show_roi_tool: false,
@@ -180,30 +203,13 @@
       }
     }
     // Make the current set persistent
-    requestQueue.register(django_url + 'user-profile/update',
-        'POST',
-        options_to_save,
-        function (status, text, xml) {
-          if (status == 200 && text) {
-              var e = JSON.parse(text);
-              if (e.error) {
-                new CATMAID.ErrorDialog("Couldn't update user settings!",
-                    e.error).show();
-                if (error) {
-                    error();
-                }
-              } else if (success){
-                  success();
-              }
-          } else {
-              new CATMAID.ErrorDialog("Couldn't update user settings!",
-                  "Updating the user profile returned an unexpected status: " +
-                  status).show();
-              if (error) {
-                  error();
-              }
-          }
-        });
+    CATMAID.fetch('user-profile/update', 'POST', options_to_save)
+      .then(success)
+      .catch(function(e) {
+        CATMAID.warn("Couldn't update user settings!");
+        error();
+        CATMAID.handleError(e);
+      });
   };
 
   // Make both User and Userprofile available in CATMAID namespace

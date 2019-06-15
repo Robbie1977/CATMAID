@@ -16,7 +16,6 @@
 # username: catmaid_user
 # password: password_of_your_catmaid_user
 
-from __future__ import unicode_literals
 
 
 import sys, os
@@ -40,7 +39,7 @@ c.execute("""SELECT cici.class_instance_b
         r.relation_name = 'part_of'""", (terminal_id,))
 rows = c.fetchall()
 if len(rows) != 0:
-    print "The terminal was already part_of a skeleton"
+    print("The terminal was already part_of a skeleton")
     sys.exit(1)
 
 # Find the right treenode:
@@ -89,7 +88,7 @@ if len(rows) != 1:
 
 skeleton_id = rows[0][0]
 
-print "The skeleton was:", skeleton_id
+print("The skeleton was:", skeleton_id)
 
 # Now insert the part_of relationship:
 

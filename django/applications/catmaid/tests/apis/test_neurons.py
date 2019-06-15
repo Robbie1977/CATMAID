@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 
-from catmaid.control.neuron_annotations import _annotate_entities
+from catmaid.control.annotation import _annotate_entities
 from catmaid.models import ClassInstance, Log
 
 from .common import CatmaidApiTestCase

@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
+from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple, Union
 
 from django import forms
 from django.conf import settings
 from django.db import connection
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render_to_response
 
 from formtools.wizard.views import SessionWizardView
@@ -64,7 +66,7 @@ class ConfirmationForm(forms.Form):
     """
     pass
 
-def get_source_type(wizard):
+def get_source_type(wizard) -> str:
     """ Test whether the project import form should be shown."""
     cleaned_data = wizard.get_cleaned_data_for_step('sourcetypeselection') \
         or {'source_type': SOURCE_TYPE_CHOICES[0]}
@@ -137,10 +139,10 @@ class ImportingWizard(SessionWizardView):
 
         return context
 
-    def get_template_names(self):
+    def get_template_names(self) -> List[str]:
         return [IMPORT_TEMPLATES[self.steps.current]]
 
-    def done(self, form_list, **kwargs):
+    def done(self, form_list, **kwargs) -> HttpResponse:
         """ All previously configured sources will now be used to import data.
         """
         # Load all wanted information from the selected projects
@@ -167,7 +169,7 @@ class ExportingWizard(SessionWizardView):
 
 def copy_annotations(source_pid, target_pid, import_treenodes=True,
         import_connectors=True, import_connectortreenodes=True,
-        import_annotations=True, import_tags=True):
+        import_annotations=True, import_tags=True, import_volumes=True) -> None:
     """ Copy annotation data (treenodes, connectors, annotations, tags) to
     another (existing) project. The newly created entities will have new IDs
     and are independent from the old ones.
@@ -176,13 +178,15 @@ def copy_annotations(source_pid, target_pid, import_treenodes=True,
     import_connectors: if ture, all connectors from the source will be imported
     import_connectortreenodes: if true, all connectors and treenodes that are
                                linked are imported, along with the links themself
+    import_volumes: if true, all volumes in the source will be copied to the
+                    target project.
     """
     # Use raw SQL to duplicate the rows, because there is no
     # need to transfer the data to Django and back to Postgres
     # again.
     cursor = connection.cursor()
 
-    imported_treenodes = []
+    imported_treenodes = [] # type: List
 
     if import_treenodes:
         # Copy treenodes from source to target
@@ -243,7 +247,7 @@ def copy_annotations(source_pid, target_pid, import_treenodes=True,
             SELECT
             FROM connector_treenode ct
             WHERE ct.project_id=%s
-            ''' % (target_pid, source_pid))
+            ''' % (target_pid, source_pid)) # FIXME "Not all arguments converted during string formatting"
 
     if import_annotations:
         try:
@@ -300,7 +304,7 @@ def copy_annotations(source_pid, target_pid, import_treenodes=True,
                 JOIN class_instance ci_s ON ci_s.id=cici.class_instance_b
                 WHERE cici.project_id=%s AND relation_id=%s
                 ''')
-        except DoesNotExist:
+        except (Class.DoesNotExist, Class.RelationDoesNotExist):
             # No annotations need to be imported if no source annotations are
             # found
             pass
@@ -309,3 +313,17 @@ def copy_annotations(source_pid, target_pid, import_treenodes=True,
         # TreenodeClassInstance
         # ConnectorClassInstance
         pass
+
+    if import_volumes:
+        # Copy connectors from source to target
+        cursor.execute('''
+            INSERT INTO catmaid_volume (project_id, user_id, creation_time,
+                edition_time, editor_id, name, comment, geometry)
+            SELECT %(target_pid)s, user_id, creation_time, now(),
+                edition_time, editor_id, name, comment, geometry
+            FROM catmaid_volume v
+            WHERE v.project_id=%(source_pid)s
+            ''', {
+                'target_pid': target_pid,
+                'source_pid': source_pid,
+            })

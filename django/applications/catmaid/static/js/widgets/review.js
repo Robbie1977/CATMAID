@@ -13,7 +13,7 @@
     this.projectId = null;
     this.currentSkeletonId = null;
     this.currentSubarborNodeId = null;
-    this.submit = submitterFn();
+    this.submit = CATMAID.submitterFn();
     var self = this;
     self.mode = 'node-review';
     self.skeleton_segments = null;
@@ -961,7 +961,7 @@
       if (showUnionColumn) {
         tableHeader.push('<th>Union</th>');
       }
-      tableHeader.push('<th># nodes</th><th></th>');
+      tableHeader.push('<th>Last node by</th><th># nodes</th><th></th>');
       elements.push('<thead><tr>' + tableHeader.join('') + '</tr></thead>');
       elements.push('<tbody style="background-color: ', zeroColor, '">');
 
@@ -996,6 +996,9 @@
           elements.push('">', segment.status, '%</td>');
         }
 
+        // Last node user
+        var lastUser = CATMAID.User.safe_get(segment.sequence[0].user_id).login;
+        elements.push('<td class="nobg" align="center">', lastUser, '</td>');
         // Number of nodes
         elements.push('<td class="nobg" align="right">', segment.nr_nodes, '</td>');
         // Review button
@@ -1141,12 +1144,12 @@
       var counterContainer = $('#counting-cache');
       counterContainer.empty();
       project.getStackViewers().forEach(function(stackViewer) {
-        var tilelayer = stackViewer.getLayer('TileLayer');
+        var stackLayer = stackViewer.getLayer('StackLayer');
         // Create loading information text for each stack viewer.
         var layerCounter = document.createElement('div');
         counterContainer.append(layerCounter);
-        if (tilelayer) {
-          tilelayer.cacheLocations(locations,
+        if (stackLayer) {
+          stackLayer.cacheLocations(locations,
               loadImageCallback.bind(self, layerCounter, stackViewer.primaryStack.title));
         }
       });
@@ -1284,7 +1287,7 @@
             element: CATMAID.skeletonListSources.createSelect(this)
           }, {
             type: 'select',
-            id: 'extra' + this.widgetID,
+            relativeId: 'extra' + this.widgetID,
             label: 'Extra',
             title: 'List problems with connected neurons',
             entries: [
@@ -1295,7 +1298,7 @@
             ]
           }, {
             type: 'select',
-            id: 'adjacents' + this.widgetID,
+            relativeId: 'adjacents' + this.widgetID,
             label: 'Adjacents',
             title: 'Maximum distance (hops) from a node when checking of duplicate connectors',
             entries: adjacents
@@ -1521,13 +1524,6 @@
       .catch(CATMAID.handleError);
   };
 
-  // Available stack orientations
-  var orientations = {
-    "0": "XY",
-    "1": "XZ",
-    "2": "ZY"
-  };
-
   /**
    * Return a title for a given issue
    */
@@ -1535,7 +1531,7 @@
     if (8 === type) {
       // Node in broken section
       return name + " " + details.section + " of " +
-          orientations[details.orientation] + " stack \"" +
+          CATMAID.Stack.ORIENTATION_NAMES[details.orientation] + " stack \"" +
           details.stack_title  + "\" (id: " + details.stack + ")";
     } else {
       return name;
@@ -1753,7 +1749,7 @@
       version: 0,
       entries: {
         detailed_review_colors: {
-          default: false
+          default: true
         }
       },
       migrations: {}
@@ -1765,7 +1761,7 @@
   CATMAID.registerWidget({
     name: "Review Widget",
     description: "Proofread a skeleton or a part of it",
-    key: "review-system",
+    key: "review-widget",
     creator: CATMAID.ReviewSystem,
     state: {
       getState: function(widget) {

@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
+import argparse
 import math
-
-from django.utils.encoding import python_2_unicode_compatible
 
 
 # Respected precision
@@ -12,7 +10,6 @@ epsilon = 0.001
 def same(a, b, eps=epsilon):
     return abs(a - b) < eps
 
-@python_2_unicode_compatible
 class Point3D:
     """A simple container to hold three coordinate values.
     """
@@ -73,3 +70,11 @@ def is_collinear(a, b, c, between=False, eps=epsilon):
         return not (min(tx, ty, tz) < 0.0 or max(tx, ty, tz) > 1.0)
     else:
         return True
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')

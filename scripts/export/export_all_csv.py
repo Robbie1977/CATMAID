@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 # Albert Cardona 2014-11-21
 # This file is meant to be run from within ./manage.py shell in the environment, like:
@@ -7,7 +6,6 @@ from __future__ import unicode_literals
 # [2] project_id = 12
 # [2] export(project_id, "all")
 
-from __future__ import with_statement
 from django.db import connection
 from django.db import transaction
 import gzip

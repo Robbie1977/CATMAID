@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 import networkx as nx
 from networkx.readwrite import json_graph
-import six
+from typing import Dict, List
 
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.db.models import Count
 
 from catmaid.models import Treenode, TreenodeConnector, UserRole
 from catmaid.control.authentication import requires_user_role
 
 
-def get_wiring_diagram(project_id=None, lower_treenode_number_limit=0):
+def get_wiring_diagram(project_id=None, lower_treenode_number_limit=0) -> Dict[str, List]:
 
     # result dictionary: {connectorid: presyn_skeletonid}
-    tmp={}
-    result={}
+    tmp={} # type: Dict
+    result={} # type: Dict
     # get the presynaptic connections
     qs = TreenodeConnector.objects.filter(
         project=project_id,
@@ -58,12 +57,12 @@ def get_wiring_diagram(project_id=None, lower_treenode_number_limit=0):
             # connector with only postsynaptic connections
             pass
 
-    nodes_tmp={}
+    nodes_tmp={} # type: Dict
     edges=[]
 
-    for k,v in six.iteritems(result):
+    for k,v in result.items():
 
-        for kk,vv in six.iteritems(v):
+        for kk,vv in v.items():
 
             edges.append(
                     {"id": str(k)+"_"+str(kk),
@@ -76,7 +75,7 @@ def get_wiring_diagram(project_id=None, lower_treenode_number_limit=0):
             nodes_tmp[kk]=None
 
     nodes=[]
-    for k,v in six.iteritems(nodes_tmp):
+    for k,v in nodes_tmp.items():
         nodes.append(
                 {
                 "id": str(k),
@@ -89,7 +88,7 @@ def get_wiring_diagram(project_id=None, lower_treenode_number_limit=0):
 
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def export_wiring_diagram_nx(request, project_id=None):
+def export_wiring_diagram_nx(request:HttpRequest, project_id=None) -> JsonResponse:
 
     lower_treenode_number_limit = int(request.POST.get('lower_skeleton_count', 0))
 
@@ -110,7 +109,7 @@ def export_wiring_diagram_nx(request, project_id=None):
 
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def export_wiring_diagram(request, project_id=None):
+def export_wiring_diagram(request:HttpRequest, project_id=None) -> JsonResponse:
 
     lower_treenode_number_limit = int(request.POST.get('lower_skeleton_count', 0))
 

@@ -5,6 +5,8 @@ from catmaid.control.nat import export_skeleton_as_nrrd_async
 from catmaid.control.treenodeexport import process_export_job
 from catmaid.control.roi import create_roi_image
 from catmaid.control.node import update_node_query_cache as do_update_node_query_cache
+from catmaid.control.authentication import deactivate_inactive_users as \
+    deactivate_inactive_users_impl
 from celery import shared_task
 
 
@@ -27,9 +29,28 @@ def update_project_statistics():
 
 
 @shared_task
+def update_project_statistics_from_scratch():
+    """Call management command to update all project statistics
+    """
+    call_command('catmaid_populate_summary_tables', clean=True)
+    return "Updated project statistics summary"
+
+
+@shared_task
 def update_node_query_cache():
     """Update the query cache of changed sections for node providers defined in
     the NODE_PROVIDERS settings variable.
     """
     do_update_node_query_cache()
     return "Updating node query cache"
+
+@shared_task
+def deactivate_inactive_users():
+    """Mark all those users as inactive that didn't log in within a specified
+    time range. Which users this are is defined by their group memberships. If a
+    user is member of a group that is also marked as "deactivation group"
+    (dedicated relation) and hasn't logged in since the associated time range,
+    the user account is set to inactive.
+    """
+    inactive_users = deactivate_inactive_users_impl()
+    return "Deactivated inactive users ({} in total)".format(len(inactive_users))

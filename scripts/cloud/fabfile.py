@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 # This fabric file will launch a standalone instance running catmaid
-
-from __future__ import print_statement, with_statement
 
 from fabric.api import *
 from fabric.contrib.console import confirm
@@ -56,7 +53,7 @@ def installBasePackages():
     with settings(warn_only=True):
         # Update image and install needed base components
         run("sudo apt-get -y --force-yes update", pty = True)
-        run("sudo apt-get -y --force-yes upgrade", pty = True)        
+        run("sudo apt-get -y --force-yes upgrade", pty = True)
         packagelist = ['git', 'apache2', 'build-essential', 'g++', 'libapache2-mod-php5', 'php5-pgsql', 'imagemagick', \
                        'python-psycopg2', 'python-yaml', 'python-tz', 'postgresql', 'pgadmin3','phppgadmin','postgresql-contrib']
         for each_package in packagelist:
@@ -109,7 +106,7 @@ def generateConfigFiles():
         data = re.sub('USERNAME', env.user, data)
         data = re.sub('CATMAID_PATH', 'CATMAID', data)
         data = re.sub('CATMAID_WEBURL', env.host_string, data)
-        data = re.sub('PYTHON_VERSION', 'python2.7', data)
+        data = re.sub('PYTHON_VERSION', 'python3.6', data)
 
         o.write( data )
         o.close()
@@ -121,7 +118,7 @@ def generateConfigFiles():
         data = open( in_configfile, 'r' ).read()
         data = re.sub('USERNAME', env.user, data)
         data = re.sub('CATMAID_PATH', 'CATMAID', data)
-        data = re.sub('PYTHON_VERSION', 'python2.7', data)
+        data = re.sub('PYTHON_VERSION', 'python3.6', data)
 
         o.write( data )
         o.close()
@@ -140,8 +137,8 @@ def installDjangoBackend():
             'libgraphicsmagick++1-dev',
             'libboost-python1.48.0',
             'libboost-python1.48-dev',
-            'ipython',	
-            'python-h5py',	
+            'ipython',
+            'python-h5py',
         ]
 
         for each_package in packagelist:
@@ -153,7 +150,7 @@ def installDjangoBackend():
             print(each_package)
             run('sudo apt-get -y --force-yes build-dep %s' % each_package, pty = True)
 
-        run('sudo apt-get install libapache2-mod-wsgi')	
+        run('sudo apt-get install libapache2-mod-wsgi')
 
         with cd('CATMAID/django'):
             run('virtualenv --no-site-packages env')

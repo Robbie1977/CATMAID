@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import os
 import json
 import logging
 
+from typing import Dict, List, Tuple
+
 from django.conf import settings
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.contrib.auth.decorators import login_required
 
 from catmaid.models import (Stack, Project, ProjectStack, Message, User,
         StackMirror)
 from catmaid.control.common import (id_generator, json_error_response,
-        get_request_list)
+        get_request_bool, get_request_list)
 from catmaid.control.tile import get_tile_source
 from catmaid.control.message import notify_user
 
@@ -46,6 +47,8 @@ crop_output_path = os.path.join(settings.MEDIA_ROOT,
 # Whether SSL certificates should be verified
 verify_ssl = getattr(settings, 'CROPPING_VERIFY_CERTIFICATES', True)
 
+# Note: some functions cannot be fully type-annotated because of the
+# conditional import of pgmagick.
 
 class CropJob(object):
     """ A small container class to keep information about the cropping
@@ -64,8 +67,8 @@ class CropJob(object):
             self.stack_mirror_ids= [stack_mirror_ids]
         else:
             self.stack_mirror_ids = stack_mirror_ids
-        self.stack_mirrors = []
-        self.stack_tile_sources = {}
+        self.stack_mirrors = [] # type: List
+        self.stack_tile_sources = {} # type: Dict
         for sid in self.stack_mirror_ids:
             stack_mirror = get_object_or_404(StackMirror, pk=sid)
             self.stack_mirrors.append(stack_mirror)
@@ -89,7 +92,7 @@ class CropJob(object):
         self.single_channel = single_channel
         self.output_path = output_path
 
-    def get_tile_path(self, stack, mirror, tile_coords):
+    def get_tile_path(self, stack, mirror, tile_coords) -> str:
         """ This method will be used when get_tile_path is called after the
         job has been initialized.
         """
@@ -123,7 +126,7 @@ class ImagePart:
             raise ValueError( "An image part must have an area, hence no " \
                     "extent should be zero!" )
 
-    def get_image( self ):
+    def get_image(self):
         # Open the image
         try:
             r = requests.get(self.path, allow_redirects=True, verify=verify_ssl)
@@ -152,16 +155,16 @@ class ImagePart:
                                                float(src_width * src_height))
         return image
 
-def to_x_index( x, stack, zoom_level, enforce_bounds=True ):
+def to_x_index(x, stack, zoom_level, enforce_bounds=True) -> int:
     """ Converts a real world position to a x pixel position.
     Also, makes sure the value is in bounds.
     """
     zero_zoom = x / stack.resolution.x
     if enforce_bounds:
         zero_zoom = min(max(zero_zoom, 0.0), stack.dimension.x - 1.0)
-    return int( zero_zoom / (2**zoom_level) + 0.5 )
+    return int(zero_zoom / (2**zoom_level) + 0.5)
 
-def to_y_index( y, stack, zoom_level, enforce_bounds=True ):
+def to_y_index(y, stack, zoom_level, enforce_bounds=True) -> int:
     """ Converts a real world position to a y pixel position.
     Also, makes sure the value is in bounds.
     """
@@ -170,16 +173,16 @@ def to_y_index( y, stack, zoom_level, enforce_bounds=True ):
         zero_zoom = min(max(zero_zoom, 0.0), stack.dimension.y - 1.0)
     return int( zero_zoom / (2**zoom_level) + 0.5 )
 
-def to_z_index( z, stack, zoom_level, enforce_bounds=True ):
+def to_z_index(z, stack, zoom_level, enforce_bounds=True) -> int:
     """ Converts a real world position to a slice/section number.
     Also, makes sure the value is in bounds.
     """
     section = z / stack.resolution.z + 0.5
     if enforce_bounds:
         section = min(max(section, 0.0), stack.dimension.z - 1.0)
-    return int( section )
+    return int(section)
 
-def addMetaData( path, job, result ):
+def addMetaData(path:str, job, result) -> None:
     """ Use this method to add meta data to the image. Due to a bug in
     exiv2, its python wrapper pyexiv2 is of no use to us. This bug
     (http://dev.exiv2.org/issues/762) hinders us to work on multi-page
@@ -192,7 +195,7 @@ def addMetaData( path, job, result ):
     res_x_nm_px = 1.0 / res_x_scaled
     res_y_nm_px = 1.0 / res_y_scaled
     res_z_nm_px = 1.0 / job.ref_stack.resolution.z
-    ifd = dict()
+    ifd = dict() # type: Dict
     ifd = TiffImagePlugin.ImageFileDirectory_v2()
     ifd[TiffImagePlugin.X_RESOLUTION] = res_x_nm_px
     ifd[TiffImagePlugin.Y_RESOLUTION] = res_y_nm_px
@@ -241,7 +244,7 @@ def addMetaData( path, job, result ):
     os.remove(path)
     os.rename(tmp_path, path)
 
-def extract_substack(job ):
+def extract_substack(job) -> List:
     """ Extracts a sub-stack as specified in the passed job while respecting
     rotation requests. A list of pgmagick images is returned -- one for each
     slice, starting on top.
@@ -343,7 +346,23 @@ def extract_substack(job ):
 
     return cropped_stack
 
-def extract_substack_no_rotation( job ):
+
+class BB:
+    """A simple bounding box for cropping purposes.
+    """
+    px_x_min = 0
+    px_x_max = 0
+    px_y_min = 0
+    px_y_max = 0
+    px_z_min = 0
+    px_z_max = 0
+    px_x_offset = 0
+    px_y_offset = 0
+    width = 0
+    height = 0
+
+
+def extract_substack_no_rotation(job) -> List:
     """ Extracts a sub-stack as specified in the passed job without respecting
     rotation requests. A list of pgmagick images is returned -- one for each
     slice, starting on top.
@@ -385,8 +404,6 @@ def extract_substack_no_rotation( job ):
         px_x_offset = abs(px_x_min_nobound) if px_x_min_nobound < 0 else 0
         px_y_offset = abs(px_y_min_nobound) if px_y_min_nobound < 0 else 0
         # Create a dictionary entry with a simple object
-        class BB:
-            pass
         bb = BB()
         bb.px_x_min = px_x_min
         bb.px_x_max = px_x_max
@@ -468,7 +485,7 @@ def extract_substack_no_rotation( job ):
 
             # Write out the image parts and make sure the maximum allowed file
             # size isn't exceeded.
-            cropped_slice = None
+            cropped_slice = Image(Geometry(bb.width, bb.height), ColorRGB(0, 0, 0))
             for ip in image_parts:
                 # Get (correctly cropped) image
                 image = ip.get_image()
@@ -482,17 +499,6 @@ def extract_substack_no_rotation( job ):
                                      "file size: %0.2f > %s Bytes" % \
                                      (estimated_total_size,
                                       settings.GENERATED_FILES_MAXIMUM_SIZE))
-
-                # It is unfortunately not possible to create proper composite
-                # images based on a canvas image newly created like this:
-                # cropped_slice = Image( Geometry(bb.width, bb.height), Color("black"))
-                # Therefore, this workaround is used.
-                if not cropped_slice:
-                    cropped_slice = Image(image)
-                    cropped_slice.backgroundColor(ColorRGB(0,0,0))
-                    cropped_slice.erase()
-                    # The '!' makes sure the aspect ration is ignored
-                    cropped_slice.scale(Geometry(bb.width, bb.height))
                 # Draw the image onto result image
                 cropped_slice.composite( image, ip.x_dst, ip.y_dst, co.OverCompositeOp )
                 # Delete tile image - it's not needed anymore
@@ -507,7 +513,7 @@ def extract_substack_no_rotation( job ):
 
     return cropped_stack
 
-def rotate2d(degrees, point, origin):
+def rotate2d(degrees, point, origin) -> Tuple[float, float]:
     """ A rotation function that rotates a point counter-clockwise around
     a point. To rotate around the origin use [0,0].
     From: http://ubuntuforums.org/archive/index.php/t-975315.html
@@ -519,10 +525,10 @@ def rotate2d(degrees, point, origin):
     newx += origin[0]
     newyorz += origin[1]
 
-    return newx,newyorz
+    return newx, newyorz
 
 @task()
-def process_crop_job(job, create_message=True):
+def process_crop_job(job, create_message=True) -> str:
     """ This method does the actual cropping. It controls the data extraction
     and the creation of the sub-stack. It can be executed as Celery task.
     """
@@ -583,7 +589,7 @@ def process_crop_job(job, create_message=True):
 
     return job.output_path if no_error_occured else error_message
 
-def start_asynch_process( job ):
+def start_asynch_process(job) -> JsonResponse:
     """ It launches the data extraction and sub-stack building as a seperate process.
     This process uses the addmessage command with manage.py to write a message for the
     user into the data base once the process is done.
@@ -595,7 +601,7 @@ def start_asynch_process( job ):
 
     return closingResponse
 
-def sanity_check( job ):
+def sanity_check(job) -> List[str]:
     """ Tests the job parameters for obvious problems.
     """
     errors = []
@@ -621,7 +627,7 @@ def sanity_check( job ):
     return errors
 
 @login_required
-def crop(request, project_id=None):
+def crop(request:HttpRequest, project_id=None) -> JsonResponse:
     """ Crops out the specified region of the stack. The region is expected to
     be given in terms of real world units (e.g. nm).
     """
@@ -633,7 +639,7 @@ def crop(request, project_id=None):
     y_max = float(request.POST['max_y'])
     z_max = float(request.POST['max_z'])
     zoom_level = float(request.POST['zoom_level'])
-    single_channel = request.POST['single_channel'] == 'true'
+    single_channel = get_request_bool(request.POST, 'single_channel', False)
     rotation_cw = float(request.GET.get('rotationcw', 0.0))
 
     # Make sure tmp dir exists and is writable
@@ -654,7 +660,7 @@ def crop(request, project_id=None):
             # If mirror is reachable use it right away
             tile_source = get_tile_source(sm.tile_source_type)
             try:
-                req = requests.head(tile_source.get_canaray_url(sm),
+                req = requests.head(tile_source.get_canary_url(sm),
                         allow_redirects=True, verify=verify_ssl)
                 reachable = req.status_code == 200
             except Exception as e:
@@ -674,21 +680,21 @@ def crop(request, project_id=None):
     errors = sanity_check( job )
     if len(errors) > 0:
         err_message = "Some problems with the cropping parameters were found: "
-        for n, e in enumerate( errors ):
+        for n, errtxt in enumerate( errors ):
             if n == 0:
-                err_message += str( n+1 ) + ". " + e
+                err_message += str( n+1 ) + ". " + errtxt
             else:
-                err_message += ", " + str( n+1 ) + ". " + e
+                err_message += ", " + str( n+1 ) + ". " + errtxt
         err_response = json_error_response( err_message )
         return err_response
 
-    result = start_asynch_process( job )
+    result = start_asynch_process(job)
     return result
 
-def cleanup( max_age=1209600 ):
+def cleanup(max_age:int=1209600) -> None:
     """ Cleans up the temporarily space of the cropped stacks.
     Such a stack is deleted if it is older than max_age, which
-    is specified in seconds and  defaults to two weeks (1209600).
+    is specified in seconds and defaults to two weeks (1209600).
     """
     search_pattern = os.path.join(crop_output_path, file_prefix + "*." + file_extension)
     now = time()
@@ -696,27 +702,24 @@ def cleanup( max_age=1209600 ):
     for item in glob.glob( search_pattern ):
         file_ctime = os.path.getctime( item )
         if (now - file_ctime) > max_age:
-            files_to_remove.append( item )
+            files_to_remove.append(item)
     for item in files_to_remove:
-            os.remove( item )
+            os.remove(item)
 
 @login_required
-def download_crop(request, file_path=None):
+def download_crop(request:HttpRequest, file_path=None) -> HttpResponse:
     """ Retrieves a previously cropped micro_stack from its temporary location
     and deletes the files afterwards.
     """
     # Optionally delete old files
-    try:
-        if CROP_AUTO_CLEANUP:
-            cleanup()
-    except NameError:
+    if settings.CROP_AUTO_CLEANUP:
         cleanup()
 
     # Check if the requested file exists
     path = os.path.join(crop_output_path, file_path)
     if not os.path.exists(path):
         # Create error response
-        err_response = HttpResponse("Sorry, the requested file (%) was not " \
+        err_response = HttpResponse("Sorry, the requested file (%s) was not " \
                 "found." % file_path)
         return err_response
 

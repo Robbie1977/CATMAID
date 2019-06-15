@@ -110,37 +110,67 @@
       self.updateControls();
     };
 
-    var onmousemove = function( e )
+    var onpointermove = function( e )
     {
+      // We need to call the global UI handler explicitly, because we use
+      // pointer events (rather than mouse events), which can only react to
+      // move/down events on the event targets where start happened too. There
+      // might be other listeners registered to the global UI instance, plus it
+      // handles the global cursor location reference.
+      CATMAID.ui.onpointermove( e );
+
       self.stackViewer.moveToPixel(
-        self.stackViewer.z,
-        self.stackViewer.y - CATMAID.ui.diffY / self.stackViewer.scale
-                              / self.stackViewer.primaryStack.anisotropy.y,
-        self.stackViewer.x - CATMAID.ui.diffX / self.stackViewer.scale
-                              / self.stackViewer.primaryStack.anisotropy.x,
-        self.stackViewer.s );
+          self.stackViewer.z,
+          self.stackViewer.y - CATMAID.ui.diffY / self.stackViewer.scale
+                                / self.stackViewer.primaryStack.anisotropy(0).y,
+          self.stackViewer.x - CATMAID.ui.diffX / self.stackViewer.scale
+                                / self.stackViewer.primaryStack.anisotropy(0).x,
+          self.stackViewer.s )
+        .catch(CATMAID.handleError);
+
       return true;
     };
 
-    var onmouseup = function( e )
+    var onpointerup = function( e )
     {
-      CATMAID.ui.releaseEvents();
-      CATMAID.ui.removeEvent( "onmousemove", onmousemove );
-      CATMAID.ui.removeEvent( "onmouseup", onmouseup );
+      self.mouseCatcher.style.cursor = 'auto';
+
+      // We need to call the global UI handler explicitly, because we use
+      // pointer events (rather than mouse events), which can only react to
+      // move/down events on the event targets where start happened too. There
+      // might be other listeners registered to the global UI instance, plus it
+      // handles the global cursor location reference.
+      CATMAID.ui.onpointerup( e );
+
+      self.mouseCatcher.removeEventListener('pointerup', onpointerup);
+      self.mouseCatcher.removeEventListener('pointermove', onpointermove);
+
       return false;
     };
 
-    var onmousedown = function( e )
+    var onpointerdown = function( e )
     {
-      CATMAID.ui.registerEvent( "onmousemove", onmousemove );
-      CATMAID.ui.registerEvent( "onmouseup", onmouseup );
-      CATMAID.ui.catchEvents( "move" );
-      CATMAID.ui.onmousedown( e );
+      if (!project.canMove()) {
+        return;
+      }
+
+      self.mouseCatcher.style.cursor = 'move';
+
+      // We need to call the global UI handler explicitly, because we use
+      // pointer events (rather than mouse events), which can only react to
+      // move/down events on the event targets where start happened too. There
+      // might be other listeners registered to the global UI instance, plus it
+      // handles the global cursor location reference.
+      CATMAID.ui.onpointerdown( e );
+
+      self.mouseCatcher.addEventListener('pointerup', onpointerup);
+      self.mouseCatcher.addEventListener('pointermove', onpointermove);
 
       CATMAID.ui.catchFocus();
 
       return false;
     };
+    this._onpointerdown = onpointerdown;
 
     var onmousewheel = function (e) {
       var w = CATMAID.ui.getMouseWheel( e );
@@ -159,6 +189,28 @@
       }
 
       return true;
+    };
+
+    this.lastPointerCoordsP = {'x': 0, 'y': 0, 'z': 0};
+    this.lastPointerCoordsS = {'x': 0, 'y': 0, 'z': 0};
+    this._mousePosStatusUpdate = function(e) {
+      let m = CATMAID.ui.getMouse(e, self.mouseCatcher, true);
+      CATMAID.statusBar.printCoords('ui');
+
+      let stackViewer = self.stackViewer;
+      let _m = CATMAID.ui.getMouse(e, self.stackViewer.getView(), true);
+      if (_m) {
+        let sCoords = self.lastPointerCoordsS;
+        let pCoords = self.lastPointerCoordsP;
+        let screenPosition = stackViewer.screenPosition();
+        sCoords.x = screenPosition.left + _m.offsetX / stackViewer.scale / stackViewer.primaryStack.anisotropy(0).x;
+        sCoords.y = screenPosition.top  + _m.offsetY / stackViewer.scale / stackViewer.primaryStack.anisotropy(0).y;
+        sCoords.z = stackViewer.z;
+        stackViewer.primaryStack.stackToProject(sCoords, pCoords);
+        // This function is called often, so the least memory consuming way
+        // should be used to create the status bar update.
+        CATMAID.statusBar.printCoords(`S: [${sCoords.x.toFixed(1)}, ${sCoords.y.toFixed(1)}, ${sCoords.z.toFixed(1)}] px, P: [${pCoords.x.toFixed(1)}, ${pCoords.y.toFixed(1)}, ${pCoords.z.toFixed(1)}] nm`);
+      }
     };
 
     //--------------------------------------------------------------------------
@@ -199,7 +251,7 @@
       }
     };
 
-    var smoothChangeSlice = function (e, step, max_fps) {
+    var animateChange = function (e, max_fps, name, change) {
       if (!max_fps) {
         // Throttle to 60 FPS by default.
         max_fps = 60.0;
@@ -208,11 +260,11 @@
       var frameTimeout = null;
       var lastFrameTime = null;
 
-      if (self.smoothScrolling) return true;
-      self.smoothScrolling = true;
+      if (self['animate' + name]) return true;
+      self['animate' + name] = true;
 
       var callback = function () {
-        if (!self.smoothScrolling) return;
+        if (!self['animate' + name]) return;
 
         // Throttle slice change rate to 60 FPS, because rendering can be much
         // faster if image data is already cached.
@@ -224,14 +276,7 @@
         }
         lastFrameTime = thisFrameTime;
 
-        var zOffset = self.stackViewer.validZDistanceByStep(self.slider_z.val, step);
-        if (!zOffset) return;
-        self.stackViewer.moveToPixel(
-            self.slider_z.val + zOffset,
-            self.stackViewer.y,
-            self.stackViewer.x,
-            self.stackViewer.s,
-            callback);
+        window.requestAnimationFrame(() => change(callback));
       };
 
       var target = e.target;
@@ -241,10 +286,23 @@
       target.onkeyup = function (e) {
         window.clearTimeout(frameTimeout);
         target.onkeyup = oldListener;
-        self.smoothScrolling = false;
+        self['animate' + name] = false;
         self.stackViewer.blockingRedraws = oldBlocking;
       };
       callback();
+    };
+
+    var smoothChangeSlice = function (e, max_fps, step) {
+      animateChange(e, max_fps, 'scroll', function (callback) {
+        var zOffset = self.stackViewer.validZDistanceByStep(self.slider_z.val, step);
+        if (!zOffset) return;
+        self.stackViewer.moveToPixel(
+            self.slider_z.val + zOffset,
+            self.stackViewer.y,
+            self.stackViewer.x,
+            self.stackViewer.s,
+            callback);
+      });
     };
 
     //--------------------------------------------------------------------------
@@ -271,9 +329,9 @@
       changeScaleDelayedTimer = window.setTimeout( changeScaleDelayedAction, 100 );
     };
 
-    this.changeScale = function( val )
+    this.changeScale = function( val, callback )
     {
-      // Determine if the mouse is over the stack view.
+      // Determine if the pointer is over the stack view.
       var offset = $(self.stackViewer.getView()).offset();
       var m = CATMAID.UI.getLastMouse();
       var x = m.x - offset.left,
@@ -285,10 +343,10 @@
         y /= self.stackViewer.scale;
         x += (self.stackViewer.x - self.stackViewer.viewWidth / self.stackViewer.scale / 2);
         y += (self.stackViewer.y - self.stackViewer.viewHeight / self.stackViewer.scale / 2);
-        self.scalePreservingLastPosition(x, y, val);
+        self.scalePreservingLastPosition(x, y, val, callback);
       } else {
-        // If the mouse is not over the stack view, zoom towards the center.
-        self.stackViewer.moveToPixel( self.stackViewer.z, self.stackViewer.y, self.stackViewer.x, val );
+        // If the pointer is not over the stack view, zoom towards the center.
+        self.stackViewer.moveToPixel( self.stackViewer.z, self.stackViewer.y, self.stackViewer.x, val, callback );
       }
     };
 
@@ -296,7 +354,7 @@
      * change the scale, making sure that the point keep_[xyz] stays in
      * the same position in the view
      */
-    this.scalePreservingLastPosition = function (keep_x, keep_y, sp) {
+    this.scalePreservingLastPosition = function (keep_x, keep_y, sp, callback) {
       var old_s = self.stackViewer.s;
       var s_extents = self.stackViewer.getZoomExtents();
       var new_s = Math.max(s_extents.min, Math.min(s_extents.max, sp));
@@ -311,7 +369,14 @@
       var new_centre_x = keep_x - dx * scale_ratio;
       var new_centre_y = keep_y - dy * scale_ratio;
 
-      self.stackViewer.moveToPixel(self.stackViewer.z, new_centre_y, new_centre_x, sp);
+      self.stackViewer.moveToPixel(self.stackViewer.z, new_centre_y, new_centre_x, sp, callback);
+    };
+
+    var smoothChangeScale = function (e, max_fps, step) {
+      animateChange(e, max_fps, 'scale', function (callback) {
+        var val = self.slider_s.val + step;
+        self.changeScale(val, callback);
+      });
     };
 
     //--------------------------------------------------------------------------
@@ -350,23 +415,31 @@
     var actions = [
 
       new CATMAID.Action({
-        helpText: "Zoom in (smaller increments with <kbd>Shift</kbd> held)",
+        helpText: "Zoom in (smaller increments with <kbd>Shift</kbd> held; hold with <kbd>Ctrl</kbd> to animate)",
         keyShortcuts: {
-          '+': [ '+', '=', 'Shift + +' ]
+          '+': [ '+', '=', 'Ctrl + =', 'Ctrl + Shift + =', 'Shift + +' ]
         },
         run: function (e) {
-          self.slider_s.move(1, !e.shiftKey);
+          if (e.ctrlKey) {
+            smoothChangeScale(e, Navigator.Settings.session.max_fps, e.shiftKey ? -0.01 : -0.05);
+          } else {
+            self.slider_s.move(1, !e.shiftKey);
+          }
           return true;
         }
       }),
 
       new CATMAID.Action({
-        helpText: "Zoom out (smaller increments with <kbd>Shift</kbd> held)",
+        helpText: "Zoom out (smaller increments with <kbd>Shift</kbd> held; hold with <kbd>Ctrl</kbd> to animate)",
         keyShortcuts: {
-          '-': [ '-', 'Shift + -' ]
+          '-': [ '-', 'Ctrl + -', 'Ctrl + Shift + -', 'Shift + -' ]
         },
         run: function (e) {
-          self.slider_s.move(-1, !e.shiftKey);
+          if (e.ctrlKey) {
+            smoothChangeScale(e, Navigator.Settings.session.max_fps, e.shiftKey ? 0.01 : 0.05);
+          } else {
+            self.slider_s.move(-1, !e.shiftKey);
+          }
           return true;
         }
       }),
@@ -378,8 +451,8 @@
         },
         run: function (e) {
           var step = e.shiftKey ? (-1 * Navigator.Settings.session.major_section_step) : -1;
-          if (e.ctrlKey) {
-            smoothChangeSlice(e, step, Navigator.Settings.session.max_fps);
+          if (Navigator.Settings.session.animate_section_change ? !e.ctrlKey : e.ctrlKey) {
+            smoothChangeSlice(e, Navigator.Settings.session.max_fps, step);
           } else {
             self.slider_z.move(step);
           }
@@ -394,8 +467,8 @@
         },
         run: function (e) {
           var step = e.shiftKey ? Navigator.Settings.session.major_section_step : 1;
-          if (e.ctrlKey) {
-            smoothChangeSlice(e, step, Navigator.Settings.session.max_fps);
+          if (Navigator.Settings.session.animate_section_change ? !e.ctrlKey : e.ctrlKey) {
+            smoothChangeSlice(e, Navigator.Settings.session.max_fps, step);
           } else {
             self.slider_z.move(step);
           }
@@ -541,8 +614,11 @@
 
       self.stackViewer = parentStackViewer;
 
-      self.mouseCatcher.onmousedown = onmousedown;
+      self.mouseCatcher.addEventListener('pointerdown', this._onpointerdown);
       self.mouseCatcher.addEventListener( "wheel", onmousewheel, false );
+      self.mouseCatcher.addEventListener('pointerdown', this._mousePosStatusUpdate);
+      self.mouseCatcher.addEventListener('pointermove', this._mousePosStatusUpdate);
+      self.mouseCatcher.addEventListener('pointerup', this._mousePosStatusUpdate);
 
       self.stackViewer.getView().appendChild( self.mouseCatcher );
 
@@ -583,12 +659,16 @@
     };
 
     /**
-     * unregister all stack related mouse and keyboard controls
+     * unregister all stack related pointer and keyboard controls
      */
     this.unregister = function()
     {
       if ( self.stackViewer && self.mouseCatcher.parentNode == self.stackViewer.getView() )
         self.stackViewer.getView().removeChild( self.mouseCatcher );
+
+      self.mouseCatcher.removeEventListener('pointerdown', this._mousePosStatusUpdate);
+      self.mouseCatcher.removeEventListener('pointermove', this._mousePosStatusUpdate);
+      self.mouseCatcher.removeEventListener('pointerup', this._mousePosStatusUpdate);
     };
 
     /**
@@ -607,15 +687,15 @@
       if (toolbar) toolbar.style.display = "none";
 
       self.slider_s.update(
-        0,
-        1,
+        undefined,
+        undefined,
         undefined,
         0,
         null );
 
       self.slider_z.update(
-        0,
-        1,
+        undefined,
+        undefined,
         undefined,
         0,
         null );
@@ -662,6 +742,19 @@
     }
   };
 
+  Navigator.prototype.getContextHelp = function() {
+    return [
+      '<h1>Navigation</h1>',
+      '<p>Both the <em>Left</em> and <em>Right Mouse Button</em> can be used to ',
+      'move in the plane (pan). The coordinates of the current location in ',
+      'stack space are displayed in the <em>X</em> and <em>Y</em> input boxes ',
+      'in the second tool bar. Additionally, the <em>Arrow Keys</em> can be used ',
+      'for planar movement. The two sliders in the toolbar allow to change ',
+      '<em>Z</em> and the <em>Zoom Level</em>.</p>',
+    ].join('');
+  };
+
+
   Navigator.Settings = new CATMAID.Settings(
       'navigator',
       {
@@ -675,6 +768,9 @@
           },
           major_section_step: {
             default: 10
+          },
+          animate_section_change: {
+            default: false
           },
           max_fps: {
             default: 60.0

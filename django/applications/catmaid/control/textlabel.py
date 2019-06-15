@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 import sys
 
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.db import connection
 
 from catmaid.models import UserRole, Textlabel, TextlabelLocation
@@ -13,7 +12,7 @@ from catmaid.control.authentication import requires_user_role
 from catmaid.control.common import cursor_fetch_dictionary, makeJSON_legacy_list
 
 @requires_user_role(UserRole.Annotate)
-def update_textlabel(request, project_id=None):
+def update_textlabel(request:HttpRequest, project_id=None) -> HttpResponse:
     params = {}
     parameter_names = ['tid', 'pid', 'x', 'y', 'z', 'text', 'type', 'r', 'g', 'b', 'a', 'font_name', 'font_style', 'font_size', 'scaling']
     for p in parameter_names:
@@ -56,7 +55,7 @@ def update_textlabel(request, project_id=None):
 
 
 @requires_user_role(UserRole.Annotate)
-def delete_textlabel(request, project_id=None):
+def delete_textlabel(request:HttpRequest, project_id=None) -> JsonResponse:
     textlabel_id = request.POST.get('tid', None)
 
     if textlabel_id is None:
@@ -76,7 +75,7 @@ def delete_textlabel(request, project_id=None):
 
 
 @requires_user_role(UserRole.Annotate)
-def create_textlabel(request, project_id=None):
+def create_textlabel(request:HttpRequest, project_id=None) -> JsonResponse:
     params = {}
     param_defaults = {
         'x': 0,
@@ -118,7 +117,7 @@ def create_textlabel(request, project_id=None):
     return JsonResponse({'tid': new_label.id})
 
 @requires_user_role([UserRole.Annotate, UserRole.Browse])
-def textlabels(request, project_id=None):
+def textlabels(request:HttpRequest, project_id=None) -> JsonResponse:
     params = {'pid': project_id, 'uid': request.user.id}
     parameter_names = ['sid', 'z', 'top', 'left', 'width', 'height', 'scale', 'resolution']
     for p in parameter_names:

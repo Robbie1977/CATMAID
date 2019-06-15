@@ -9,6 +9,13 @@
   Stack.ORIENTATION_XZ = 1;
   Stack.ORIENTATION_ZY = 2;
 
+  Stack.ORIENTATIONS = [Stack.ORIENTATION_XY, Stack.ORIENTATION_XZ, Stack.ORIENTATION_ZY];
+
+  Stack.ORIENTATION_NAMES = [];
+  Stack.ORIENTATION_NAMES[Stack.ORIENTATION_XY] = "XY";
+  Stack.ORIENTATION_NAMES[Stack.ORIENTATION_XZ] = "XZ";
+  Stack.ORIENTATION_NAMES[Stack.ORIENTATION_ZY] = "ZY";
+
   /**
    * A Stack is created with a given pixel resolution, pixel dimension, a
    * translation relative to the project and lists of planes to be excluded
@@ -22,8 +29,9 @@
       resolution,         //!< {Array} physical resolution in units/pixel [x, y, z, ...]
       translation,        //!< @todo replace by an affine transform
       skip_planes,        //!< {Array} planes to be excluded from the stack's view [[z,t,...], [z,t,...], ...]
-      num_zoom_levels,      //!< {int} that defines the number of available non-artificial zoom levels
+      downsample_factors,
       max_zoom_level,       //!< {int} that defines the maximum available zoom level
+      comment,
       description,         //!< {String} of arbitrary meta data
       metadata,
       orientation,         //!< {Integer} orientation (0: xy, 1: xz, 2: yz)
@@ -59,17 +67,26 @@
     self.MAX_Z = MAX_Z;
 
     //! estimate the zoom levels
-    if ( num_zoom_levels < 0 ) {
+    if (!Array.isArray(downsample_factors)) {
+      downsample_factors = [{x: 1, y: 1, z: 1}];
       self.MAX_S = 0;
       var max_dim = Math.max( MAX_X, MAX_Y );
       var min_size = 1024;
-      while ( max_dim / Math.pow( 2, self.MAX_S ) > min_size )
+      while ( max_dim / Math.pow( 2, self.MAX_S ) > min_size ) {
+        // By default, assume factor 2 downsampling in x, y, and no downsampling in z.
         ++self.MAX_S;
+        downsample_factors.push({
+          x: Math.pow(2, self.MAX_S),
+          y: Math.pow(2, self.MAX_S),
+          z: 1});
+      }
     } else {
-      self.MAX_S = num_zoom_levels;
+      self.MAX_S = downsample_factors.length - 1;
     }
     self.MIN_S = max_zoom_level;
+    self.downsample_factors = downsample_factors;
 
+    self.comment = comment;
     self.description = description;
     self.metadata = metadata;
     self.orientation = orientation;
@@ -80,12 +97,62 @@
       return a.position - b.position;
     });
 
+    // Allow metadata field to override clamping default value (true)
+    this.clamp = metadata ? CATMAID.tools.getDefined(metadata.clamp, true) : true;
+
     this.minPlanarRes = Math.min(resolution.x, resolution.y);
-    /** @type {Object} Relative anisotropy of the planar dimensions. */
-    this.anisotropy = Object.keys(resolution).reduce(function (ani, dim) {
-      ani[dim] = resolution[dim] / self.minPlanarRes;
-      return ani;
-    }, {});
+
+    this.anisotropy = function (s) {
+      if (s === 0) {
+        return {
+          x: this.resolution.x / this.minPlanarRes,
+          y: this.resolution.y / this.minPlanarRes,
+        };
+      }
+
+      var zoom = Math.min(this.MAX_S, Math.max(0, Math.ceil(s)));
+      var factors = {
+        x: this.downsample_factors[zoom].x,
+        y: this.downsample_factors[zoom].y,
+      };
+
+      if (s < 0 || s > this.MAX_S) {
+        factors.x /= Math.pow(2, zoom - s);
+        factors.y /= Math.pow(2, zoom - s);
+      } else if (s !== zoom) {
+        var nextFactors = {
+          x: this.downsample_factors[zoom - 1].x,
+          y: this.downsample_factors[zoom - 1].y,
+        };
+        factors.x /= Math.pow(factors.x / nextFactors.x, zoom - s);
+        factors.y /= Math.pow(factors.y / nextFactors.y, zoom - s);
+      }
+
+      let ezf = this.effectiveDownsampleFactor(s);
+
+      factors.x *= this.resolution.x / (ezf * this.minPlanarRes);
+      factors.y *= this.resolution.y / (ezf * this.minPlanarRes);
+
+      return factors;
+    };
+
+    this.effectiveDownsampleFactor = function (s) {
+      var zoom = Math.min(this.MAX_S, Math.max(0, Math.ceil(s)));
+      var factor = Math.max(
+        this.downsample_factors[zoom].x,
+        this.downsample_factors[zoom].y);
+
+      if (s < 0 || s > this.MAX_S) {
+        factor /= Math.pow(2, zoom - s);
+      } else if (s !== zoom) {
+        var nextFactor = Math.max(
+          this.downsample_factors[zoom - 1].x,
+          this.downsample_factors[zoom - 1].y);
+        factor /= Math.pow(factor / nextFactor, zoom - s);
+      }
+
+      return factor;
+    };
 
     /**
      * Project x-coordinate for stack coordinates
@@ -216,19 +283,19 @@
     case Stack.ORIENTATION_XZ:
       projectToStackZ = function( zp, yp, xp )
       {
-        return Math.floor( ( yp - translation.y ) / resolution.z );
+        return Math.floor((yp - translation.y) / resolution.z + yp * Number.EPSILON);
       };
       break;
     case Stack.ORIENTATION_ZY:
       projectToStackZ = function( zp, yp, xp )
       {
-        return Math.floor( ( xp - translation.x ) / resolution.z );
+        return Math.floor((xp - translation.x) / resolution.z + xp * Number.EPSILON);
       };
       break;
     default:
       projectToStackZ = function( zp, yp, xp )
       {
-        return Math.floor( ( zp - translation.z ) / resolution.z );
+        return Math.floor((zp - translation.z) / resolution.z + zp * Number.EPSILON);
       };
     }
 
@@ -497,7 +564,8 @@
       }
       var selectedMirror = mirror;
 
-      return CATMAID.getTileSource(
+      return CATMAID.TileSources.get(
+          selectedMirror.id,
           selectedMirror.tile_source_type,
           selectedMirror.image_base,
           selectedMirror.file_extension,
@@ -521,7 +589,86 @@
     self.removeMirror = function(mirrorIndex) {
       self.mirrors.splice(mirrorIndex, 1);
     };
+
+    self.labelMetadata = function () {
+      if (this.metadata) {
+        return this.metadata.catmaidLabelMeta;
+      }
+    };
+
+    self.imageBlockMirrors = function () {
+      return self.mirrors
+          .filter(m => CATMAID.TileSources.typeIsImageBlockSource(m.tile_source_type));
+    };
+
+    self.isReorientable = function () {
+      return self.imageBlockMirrors().length !== 0;
+    };
   }
+
+  Stack.prototype.encodedId = function () {
+    return this.id;
+  };
+
+  Stack.parseReorientedID = function (stackID) {
+    let reorient = false;
+    if (stackID.endsWith) {
+      for (let orient of Stack.ORIENTATIONS) {
+        if (stackID.endsWith('_' + Stack.ORIENTATION_NAMES[orient].toLowerCase())) {
+          stackID = stackID.substring(0, stackID.length - 3);
+          reorient = orient;
+        }
+      }
+    }
+
+    return {
+      stackID,
+      reorient
+    };
+  };
+
+  Stack.encodeReorientedID = function (stackID, reorient) {
+    if (reorient in Stack.ORIENTATIONS)
+      return stackID + '_' + Stack.ORIENTATION_NAMES[reorient].toLowerCase();
+
+    return stackID;
+  };
+
+  /**
+   * Create a stack by fetching from the backend stack info API.
+   *
+   * @returns {Promise} Promise resolving with the Stack.
+   */
+  Stack.fetch = function(projectId, stackId) {
+    return CATMAID.fetch(projectId + '/stack/' + stackId + '/info')
+      .then(CATMAID.Stack.fromStackInfoJson);
+  };
+
+  /**
+   * Create a stack instance from JSON returned by the backend stack info
+   * API.
+   *
+   * @param  {Object} json
+   * @return {Stack}
+   */
+  Stack.fromStackInfoJson = function (json) {
+    return new CATMAID.Stack(
+        json.sid,
+        json.stitle,
+        json.dimension,
+        json.resolution,
+        json.translation,
+        json.broken_slices,
+        json.downsample_factors,
+        -2,
+        json.comment,
+        json.description,
+        json.metadata,
+        json.orientation,
+        json.canary_location,
+        json.placeholder_color,
+        json.mirrors);
+  };
 
   /**
    * Get all available stacks for a given project, optionally sorted by name.

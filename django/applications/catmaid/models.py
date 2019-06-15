@@ -1,33 +1,40 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
+
+from builtins import str
 
 from datetime import datetime
 import logging
 import sys
 import re
 import urllib
-import six
+import urllib.parse
+import colorsys
+
+from typing import Dict, Tuple
 
 from django import forms
 from django.conf import settings
 from django.contrib.auth.models import User, Group
 from django.contrib.gis.db import models as spatial_models
-from django.contrib.postgres.fields import JSONField
+from django.contrib.postgres.fields import JSONField, ArrayField
 from django.core.validators import RegexValidator
 from django.db import connection, models
 from django.db.models import Q
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 from django.utils import timezone
-from django.utils.encoding import python_2_unicode_compatible
+from django.utils.translation import ugettext_lazy as _
 
+from datetime import timedelta
+from guardian.models import (UserObjectPermissionBase,
+        GroupObjectPermissionBase)
 from guardian.shortcuts import get_objects_for_user
 from taggit.managers import TaggableManager
 from rest_framework.authtoken.models import Token
+from random import random
 
-from .fields import Double3DField, Integer3DField, RGBAField
-
-from .control.user import distinct_user_color
+from .fields import (Double3DField, Integer3DField, RGBAField,
+        DownsampleFactorsField, SerializableGeometryField)
 
 
 CELL_BODY_CHOICES = (
@@ -41,8 +48,14 @@ class UserRole(object):
     Annotate = 'Annotate'
     Browse = 'Browse'
     Import = 'Import'
+    QueueComputeTask = 'QueueComputeTask'
 
-@python_2_unicode_compatible
+    # The AnnotateWithToken user role allows users to do write (annotate)
+    # requests when using token authentication and not the regular front-end.
+    # This can be disabled using REQUIRE_EXTRA_TOKEN_PERMISSIONS = False in
+    # settings.py.
+    AnnotateWithToken = 'AnnotateWithToken'
+
 class Project(models.Model):
     title = models.TextField()
     comment = models.TextField(blank=True, null=True)
@@ -57,7 +70,9 @@ class Project(models.Model):
             ("can_administer", "Can administer projects"),
             ("can_annotate", "Can annotate projects"),
             ("can_browse", "Can browse projects"),
-            ("can_import", "Can import into projects")
+            ("can_import", "Can import into projects"),
+            ("can_queue_compute_task", "Can queue resource-intensive tasks"),
+            ("can_annotate_with_token", "Can annotate project using API token"),
         )
 
     def __str__(self):
@@ -91,9 +106,10 @@ TILE_SOURCE_TYPES = (
     (8, '8: DVID imagetile tiles'),
     (9, '9: FlixServer tiles'),
     (10, '10: H2N5 tiles'),
+    (11, '11: N5 volume'),
+    (12, '12: Boss tiles'),
 )
 
-@python_2_unicode_compatible
 class Stack(models.Model):
     title = models.TextField(help_text="Descriptive title of this stack.")
     dimension = Integer3DField(help_text="The pixel dimensionality of the "
@@ -102,14 +118,13 @@ class Stack(models.Model):
             "nanometers.")
     comment = models.TextField(blank=True, null=True,
             help_text="A comment that describes the image data.")
-    num_zoom_levels = models.IntegerField(default=-1,
-            help_text="The number of zoom levels a stack has data for. A "
-            "value of -1 lets CATMAID dynamically determine the actual value "
-            "so that at this value the largest extent (X or Y) won't be "
-            "smaller than 1024 pixels. Values larger -1 will be used directly.")
+    downsample_factors = DownsampleFactorsField(
+            help_text="Downsampling factors along each dimensions for each zoom level.")
     description = models.TextField(default='', blank=True,
             help_text="Arbitrary text that is displayed alongside the stack.")
-    metadata = JSONField(blank=True, null=True)
+    metadata = JSONField(blank=True, null=True, help_text="Optional JSON for a "
+            "stack. Supported is the boolean field \"clamp\" which can be set "
+            "to \"false\" to disable tile access clamping.")
     attribution = models.TextField(blank=True, null=True,
             help_text="Attribution or citation information for this dataset.")
     canary_location = Integer3DField(default=(0, 0, 0), help_text="Stack space "
@@ -123,8 +138,12 @@ class Stack(models.Model):
     def __str__(self):
         return self.title
 
+    @property
+    def num_zoom_levels(self):
+        """Number of zoom levels, or -1 if determined automatically."""
+        return -1 if self.downsample_factors is None else len(self.downsample_factors) - 1
 
-@python_2_unicode_compatible
+
 class StackMirror(models.Model):
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE)
     title = models.TextField(help_text="Descriptive title of this stack mirror.")
@@ -151,7 +170,6 @@ class StackMirror(models.Model):
         return self.stack.title + " (" + self.title + ")"
 
 
-@python_2_unicode_compatible
 class ProjectStack(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE)
@@ -192,7 +210,6 @@ def create_concept_sub_table(table_name):
                     FOR EACH ROW EXECUTE PROCEDURE on_edit()''' % (table_name, table_name))
 
 
-@python_2_unicode_compatible
 class Class(models.Model):
     # Repeat the columns inherited from 'concept'
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -243,7 +260,7 @@ class ClassInstance(models.Model):
         relations = dict((r.relation_name, r.id) for r in Relation.objects.filter(project=project_id))
         classes = dict((c.class_name, c.id) for c in Class.objects.filter(project=project_id))
 
-        connected_skeletons_dict = {}
+        connected_skeletons_dict = {} # type: Dict
         # Find connectivity for each skeleton and add neuron name
         for skeleton in skeletons:
             qs_tc = TreenodeConnector.objects.filter(
@@ -293,7 +310,7 @@ class ClassInstance(models.Model):
 
         # sort by count
         from operator import itemgetter
-        connected_skeletons = six.itervalues(connected_skeletons_dict)
+        connected_skeletons = connected_skeletons_dict.values()
         result = reversed(sorted(connected_skeletons, key=itemgetter('id__count')))
         return result
 
@@ -306,56 +323,6 @@ class ClassInstance(models.Model):
         return self.get_connected_neurons(
             project_id,
             ConnectivityDirection.POSTSYNAPTIC_PARTNERS, skeletons)
-
-    def cell_body_location(self):
-        qs = list(ClassInstance.objects.filter(
-                class_column__class_name='cell_body_location',
-                cici_via_b__relation__relation_name='has_cell_body',
-                cici_via_b__class_instance_a=self))
-        if len(qs) == 0:
-            return 'Unknown'
-        elif len(qs) == 1:
-            return qs[0].name
-        elif qs:
-            raise Exception("Multiple cell body locations found for neuron '%s'" % (self.name,))
-
-    def set_cell_body_location(self, new_location):
-        # FIXME: for the moment, just hardcode the user ID:
-        user = User.objects.get(pk=3)
-        if new_location not in [x[1] for x in CELL_BODY_CHOICES]:
-            raise Exception("Incorrect cell body location '%s'" % (new_location,))
-        # Just delete the ClassInstance - ON DELETE CASCADE should deal with the rest:
-        ClassInstance.objects.filter(
-            cici_via_b__relation__relation_name='has_cell_body',
-            cici_via_b__class_instance_a=self).delete()
-        if new_location != 'Unknown':
-            location = ClassInstance()
-            location.name = new_location
-            location.project = self.project
-            location.user = user
-            location.class_column = Class.objects.get(class_name='cell_body_location', project=self.project)
-            location.save()
-            r = Relation.objects.get(relation_name='has_cell_body', project=self.project)
-            cici = ClassInstanceClassInstance()
-            cici.class_instance_a = self
-            cici.class_instance_b = location
-            cici.relation = r
-            cici.user = user
-            cici.project = self.project
-            cici.save()
-
-    def lines_as_str(self):
-        # FIXME: not expected to work yet
-        return ', '.join([unicode(x) for x in self.lines.all()])
-
-    def to_dict(self):
-        # FIXME: not expected to work yet
-        return {'id': self.id,
-                'trakem2_id': self.trakem2_id,
-                'lineage' : 'unknown',
-                'neurotransmitters': [],
-                'cell_body_location': [self.cell_body, Neuron.cell_body_choices_dict[self.cell_body]],
-                'name': self.name}
 
 
 class Relation(models.Model):
@@ -407,7 +374,6 @@ class ClassInstanceClassInstance(models.Model):
     class Meta:
         db_table = "class_instance_class_instance"
 
-@python_2_unicode_compatible
 class BrokenSlice(models.Model):
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE)
     index = models.IntegerField()
@@ -419,7 +385,6 @@ class BrokenSlice(models.Model):
         return "Broken section {} in stack {}".format(self.index, self.stack)
 
 
-@python_2_unicode_compatible
 class InterpolatableSection(models.Model):
     """Opposed to the broken slice, an interpolated slice is not supposed to be
     removed, but data on it can be interpolated if the user chooses so to
@@ -516,6 +481,17 @@ class UserFocusedModel(models.Model):
     objects = UserFocusedManager()
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    creation_time = models.DateTimeField(default=timezone.now)
+    edition_time = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        abstract = True
+
+
+class NonCascadingUserFocusedModel(models.Model):
+    objects = UserFocusedManager()
+    user = models.ForeignKey(User, on_delete=models.DO_NOTHING)
+    project = models.ForeignKey(Project, on_delete=models.DO_NOTHING)
     creation_time = models.DateTimeField(default=timezone.now)
     edition_time = models.DateTimeField(default=timezone.now)
 
@@ -709,8 +685,20 @@ class Volume(UserFocusedModel):
                                related_name='editor', db_column='editor_id')
     name = models.CharField(max_length=255)
     comment = models.TextField(blank=True, null=True)
-    # GeoDjango-specific: a geometry field with PostGIS-specific 3 dimensions.
-    geometry = spatial_models.GeometryField(dim=3, srid=0)
+    # A custom geometry field allows us to serialize the geometry data in a
+    # simple text-based form.
+    geometry = SerializableGeometryField()
+
+
+class VolumeClassInstance(UserFocusedModel):
+    # Repeat the columns inherited from 'relation_instance'
+    relation = models.ForeignKey(Relation, on_delete=models.CASCADE)
+    # Now new columns:
+    volume = models.ForeignKey(Volume, on_delete=models.CASCADE)
+    class_instance = models.ForeignKey(ClassInstance, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = "volume_class_instance"
 
 
 class RegionOfInterest(UserFocusedModel):
@@ -857,21 +845,21 @@ class CardinalityRestriction(models.Model):
             return num_linked_ci < self.value
         elif self.cardinality_type == 3:
             # Exactly n for each sub type
-            subclass_links_q = get_subclass_links()
+            subclass_links_q = get_subclass_links_qs() # type: ignore
             for link in subclass_links_q:
                 num_linked_ci = self.get_num_class_instances(ci, link.class_a_id)
                 if num_linked_ci != self.value:
                     return True
         elif self.cardinality_type == 4:
             # Max n for each sub type
-            subclass_links_q = get_subclass_links()
+            subclass_links_q = get_subclass_links_qs() # type: ignore
             for link in subclass_links_q:
                 num_linked_ci = self.get_num_class_instances(ci, link.class_a_id)
                 if num_linked_ci > self.value:
                     return True
         elif self.cardinality_type == 5:
             # Min n for each sub type
-            subclass_links_q = get_subclass_links()
+            subclass_links_q = get_subclass_links_qs() # type: ignore
             for link in subclass_links_q:
                 num_linked_ci = self.get_num_class_instances(ci, link.class_a_id)
                 if num_linked_ci < self.value:
@@ -896,7 +884,6 @@ class StackClassInstance(models.Model):
         db_table = "stack_class_instance"
 
 
-@python_2_unicode_compatible
 class StackGroupRelation(models.Model):
     name = models.TextField(max_length=80)
 
@@ -907,7 +894,6 @@ class StackGroupRelation(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class StackGroup(models.Model):
     title = models.TextField(default="", max_length=80)
     comment = models.TextField(blank=True, null=True,
@@ -946,6 +932,206 @@ class StackGroupClassInstance(models.Model):
         db_table = "stack_group_class_instance"
 
 
+# The default values for the histogram bins for both absolute dot product and
+# distance (in um). They are stored in own field For better readability and
+# reuse.
+NblastConfigDefaultDotBreaks = list(n/10 for n in range(11))
+NblastConfigDefaultDistanceBreaks = (0, 0.75, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7,
+        8, 9, 10, 12, 14, 16, 20, 25, 30, 40, 500)
+
+
+class PointSet(NonCascadingUserFocusedModel):
+    """Store a set of points. A non-cascading user focused model is used,
+    because cascading deletes are handled on the database level.
+    """
+    name = models.TextField()
+    description = models.TextField()
+    points = ArrayField(models.FloatField())
+
+    class Meta:
+        db_table = "point_set"
+
+
+class NblastSample(NonCascadingUserFocusedModel):
+    """Store binned distance and dot product information of the sample neuron
+    set in a histogram as well as a probability density based on it. A
+    non-cascading user focused model is used, because cascading deletes are
+    handled on the database level. Optionally, a subset of sample pairs can be
+    defined which describes pairs of samples as a tuple of four elements each:
+    [sample 1 type, sample 1 id, sample 2 type, sample 2 id] with type being
+    either 0, 1 or 2 for neuron, pointcloud and pointset respectively.
+    """
+    name = models.TextField()
+    sample_neurons = ArrayField(models.IntegerField())
+    sample_pointclouds = ArrayField(models.IntegerField())
+    sample_pointsets = ArrayField(models.IntegerField())
+    histogram = ArrayField(ArrayField(models.IntegerField()))
+    probability = ArrayField(ArrayField(models.FloatField()))
+    subset = JSONField(blank=True, null=True)
+
+    class Meta:
+        db_table = "nblast_sample"
+
+
+class NblastConfig(NonCascadingUserFocusedModel):
+    """A NBLAST configuration that defines histogram binning and which
+    NblastSample entries define the match sampling and the random sampling.
+    Based on those it can keep a base scoring matrix. Referential integretry
+    (delete cascade) is taken care of by the database. A non-cascading user
+    focused model is used, because cascading deletes are handled on the database
+    level.
+    """
+    name = models.TextField()
+    status = models.TextField()
+    distance_breaks = ArrayField(models.FloatField(
+            default=NblastConfigDefaultDotBreaks))
+    dot_breaks = ArrayField(models.FloatField(
+            default=NblastConfigDefaultDistanceBreaks))
+    match_sample = models.ForeignKey(NblastSample, on_delete=models.DO_NOTHING,
+            related_name='match_config_set')
+    random_sample = models.ForeignKey(NblastSample, on_delete=models.DO_NOTHING,
+            related_name='random_config_set')
+    scoring = ArrayField(ArrayField(models.FloatField()))
+    resample_step = models.FloatField(default=1000)
+    tangent_neighbors = models.IntegerField(default=5)
+
+
+    class Meta:
+        db_table = "nblast_config"
+
+
+class NblastSkeletonSourceType(models.Model):
+
+    name = models.TextField(primary_key=True)
+    description = models.TextField(default="")
+
+    class Meta:
+        db_table = "nblast_skeleton_source_type"
+
+
+class NblastSimilarity(NonCascadingUserFocusedModel):
+    """A model to represent computed similarity matrices for a particular
+    configuration using a set of query and target objects (skeleton IDs or point
+    cloud IDs). A non-cascading user focused model is used, because cascading
+    deletes are handled on the database level as well.
+    """
+    name = models.TextField()
+    status = models.TextField()
+    config = models.ForeignKey(NblastConfig, on_delete=models.DO_NOTHING)
+    scoring = ArrayField(ArrayField(models.FloatField()))
+    query_type = models.ForeignKey(NblastSkeletonSourceType,
+        related_name='query_type_set', on_delete=models.DO_NOTHING)
+    target_type = models.ForeignKey(NblastSkeletonSourceType,
+        related_name='target_type_set', on_delete=models.DO_NOTHING)
+    # Query and target object references as they were sent from the client. A
+    # value of NULL/None is synonymous with all objects of the respective type.
+    initial_query_objects = ArrayField(models.IntegerField(), default=None, blank=True, null=True)
+    initial_target_objects = ArrayField(models.IntegerField(), default=None, blank=True, null=True)
+    # All query objects that reference into a scoring matrix. Initially not
+    # populated.
+    query_objects = ArrayField(models.IntegerField(), default=None, blank=True, null=True)
+    target_objects = ArrayField(models.IntegerField(), default=None, blank=True, null=True)
+    # Objects that couldn't be used during the computation
+    invalid_query_objects = ArrayField(models.IntegerField(), default=None, blank=True, null=True)
+    invalid_target_objects = ArrayField(models.IntegerField(), default=None, blank=True, null=True)
+    # The normalization mode
+    normalized = models.TextField(default='raw')
+    use_alpha = models.BooleanField(default=False)
+    computation_time = models.FloatField(default=0)
+    detailed_status = models.TextField( blank=True, null=True)
+    # Whether a reverse scoring should be used
+    reverse = models.BooleanField(default=False)
+    # To not neccessarily store large scoring matrixes with a lot of low score
+    # results, only store the the top N results for each query. Disabled using 0.
+    top_n = models.IntegerField(default=0, blank=True, null=True)
+
+    class Meta:
+        db_table = "nblast_similarity"
+
+
+class PointCloud(NonCascadingUserFocusedModel):
+    """A point cloud. Its points are linked through the point_cloud_point
+    relation. A non-cascading user focused model is used, because cascading
+    deletes are handled on the database level as well.
+    """
+
+    name = models.TextField()
+    description = models.TextField(default="")
+    source_path = models.TextField(default="")
+    images = models.ManyToManyField("ImageData", through='PointCloudImageData')
+    # Points are stored in an array of the format [X, Y, Z, X, Y, Z, …]. A
+    # length divisible by three is enforced by the database.
+    points = models.ManyToManyField("Point", through='PointCloudPoint')
+
+    def num_permissions(self):
+        n_user_perms = PointCloudUserObjectPermission.objects.filter(content_object=self).count()
+        n_group_perms = PointCloudGroupObjectPermission.objects.filter(content_object=self).count()
+        return n_user_perms + n_group_perms
+
+    class Meta:
+        db_table = 'pointcloud'
+        permissions = (
+            ("can_read", "Can read point cloud"),
+            ("can_update", "Can update point cloud"),
+        )
+
+    def __str__(self):
+        return self.name
+
+
+class PointCloudUserObjectPermission(UserObjectPermissionBase):
+    content_object = models.ForeignKey(PointCloud, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = 'pointcloud_user_object_permission'
+
+
+class PointCloudGroupObjectPermission(GroupObjectPermissionBase):
+    content_object = models.ForeignKey(PointCloud, on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = 'pointcloud_group_object_permission'
+
+
+class PointCloudPoint(models.Model):
+    """Links a point to a pointcloud for a particular project. Referential
+    integretry (delete cascade) is taken care of by the database.
+    """
+    project = models.ForeignKey(Project, on_delete=models.DO_NOTHING)
+    pointcloud = models.ForeignKey(PointCloud, on_delete=models.DO_NOTHING)
+    point = models.ForeignKey(Point, on_delete=models.DO_NOTHING)
+
+    class Meta:
+        db_table = 'pointcloud_point'
+
+
+class ImageData(NonCascadingUserFocusedModel):
+    """A piece of image data that can be linked to other entities. A
+    non-cascading user focused model is used, because cascading deletes are
+    handled on the database level as well.
+    """
+    name = models.TextField()
+    description = models.TextField(default="")
+    source_path = models.TextField(default="")
+    content_type = models.TextField()
+    image = spatial_models.BinaryField()
+
+    class Meta:
+        db_table = 'image_data'
+
+
+class PointCloudImageData(models.Model):
+    """Links a piece of image data to a point cloud. Referential integretry
+    (delete cascade) is taken care of by the database.
+    """
+    project = models.ForeignKey(Project, on_delete=models.DO_NOTHING)
+    pointcloud = models.ForeignKey(PointCloud, on_delete=models.DO_NOTHING)
+    image_data = models.ForeignKey(ImageData, on_delete=models.DO_NOTHING)
+
+    class Meta:
+        db_table = 'pointcloud_image_data'
+
+
 # ------------------------------------------------------------------------
 # Now the non-Django tables:
 
@@ -963,7 +1149,7 @@ class NeuronSearch(forms.Form):
     search = forms.CharField(max_length=100, required=False)
     cell_body_location = forms.ChoiceField(
         choices=((('a', 'Any'),)+CELL_BODY_CHOICES))
-    order_by = forms.ChoiceField(SORT_ORDERS_CHOICES)
+    order_by = forms.ChoiceField(choices=SORT_ORDERS_CHOICES)
 
     def minimal_search_path(self):
         result = ""
@@ -972,7 +1158,7 @@ class NeuronSearch(forms.Form):
                       ('cell_body_location', '/cell_body_location/', "-1")]
         for p in parameters:
             if self.cleaned_data[p[0]] != p[2]:
-                result += p[1] + urllib.quote(str(self.cleaned_data[p[0]]))
+                result += p[1] + urllib.parse.quote(str(self.cleaned_data[p[0]]))
         return result
 
 
@@ -985,7 +1171,6 @@ class Log(UserFocusedModel):
         db_table = "log"
 
 
-@python_2_unicode_compatible
 class DataViewType(models.Model):
     title = models.TextField()
     code_type = models.TextField()
@@ -1045,7 +1230,6 @@ class DataView(models.Model):
                 dv.save()
 
 
-@python_2_unicode_compatible
 class SamplerState(models.Model):
     name = models.TextField()
     description = models.TextField()
@@ -1054,7 +1238,6 @@ class SamplerState(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class Sampler(UserFocusedModel):
     interval_length = models.FloatField()
     interval_error = models.FloatField()
@@ -1062,12 +1245,13 @@ class Sampler(UserFocusedModel):
     review_required = models.BooleanField(default=True)
     sampler_state = models.ForeignKey(SamplerState, on_delete=models.CASCADE)
     skeleton = models.ForeignKey(ClassInstance, db_index=True, on_delete=models.CASCADE)
+    leaf_segment_handling = models.TextField(default="ignore")
+    merge_limit = models.FloatField(default=0)
 
     def __str__(self):
         return "Sampler for {}".format(self.skeleton_id)
 
 
-@python_2_unicode_compatible
 class SamplerIntervalState(models.Model):
     name = models.TextField()
     description = models.TextField()
@@ -1076,20 +1260,21 @@ class SamplerIntervalState(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class SamplerInterval(UserFocusedModel):
     domain = models.ForeignKey('SamplerDomain', db_index=True, on_delete=models.CASCADE)
     interval_state = models.ForeignKey(SamplerIntervalState, db_index=True, on_delete=models.CASCADE)
-    start_node = models.ForeignKey(Treenode, on_delete=models.CASCADE,
+    # Integrety od start and end node are handled by the database. We don't want
+    # cascading deletes, because sampler nodes should not be touched while the
+    # sampler is active.
+    start_node = models.ForeignKey(Treenode, on_delete=models.DO_NOTHING,
             related_name="sampler_interval_start_node_set")
-    end_node = models.ForeignKey(Treenode, on_delete=models.CASCADE,
+    end_node = models.ForeignKey(Treenode, on_delete=models.DO_NOTHING,
             related_name="sampler_interval_end_node_set")
 
     def __str__(self):
         return "({}, {})".format(self.start_node_id, self.end_node_id)
 
 
-@python_2_unicode_compatible
 class SamplerConnectorState(models.Model):
     name = models.TextField()
     description = models.TextField()
@@ -1098,7 +1283,6 @@ class SamplerConnectorState(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class SamplerConnector(UserFocusedModel):
     interval = models.ForeignKey('SamplerInterval', db_index=True, on_delete=models.CASCADE)
     connector = models.ForeignKey('Connector', db_index=True, on_delete=models.CASCADE)
@@ -1108,7 +1292,6 @@ class SamplerConnector(UserFocusedModel):
         return "({}, {})".format(self.start_node_id, self.end_node_id)
 
 
-@python_2_unicode_compatible
 class SamplerDomainType(models.Model):
     name = models.TextField()
     description = models.TextField()
@@ -1117,7 +1300,6 @@ class SamplerDomainType(models.Model):
         return self.name
 
 
-@python_2_unicode_compatible
 class SamplerDomain(UserFocusedModel):
     sampler = models.ForeignKey(Sampler, on_delete=models.CASCADE)
     start_node = models.ForeignKey(Treenode, on_delete=models.CASCADE)
@@ -1128,7 +1310,6 @@ class SamplerDomain(UserFocusedModel):
         return "Start: {}".format(self.start_node_id)
 
 
-@python_2_unicode_compatible
 class SamplerDomainEnd(models.Model):
     domain = models.ForeignKey(SamplerDomain, on_delete=models.CASCADE, db_index=True)
     end_node = models.ForeignKey(Treenode, on_delete=models.CASCADE)
@@ -1136,7 +1317,6 @@ class SamplerDomainEnd(models.Model):
     def __str__(self):
         return "End: {}".format(self.end_node_id)
 
-@python_2_unicode_compatible
 class SkeletonSummary(models.Model):
     """Holds summary information on individual skeletons. Data insertion and
     updates are managed by the database through triggers. The skeleton field
@@ -1154,6 +1334,7 @@ class SkeletonSummary(models.Model):
     last_summary_update = models.DateTimeField(default=timezone.now)
     original_creation_time = models.DateTimeField(default=timezone.now)
     last_edition_time = models.DateTimeField(default=timezone.now)
+    last_editor = models.ForeignKey(User, on_delete=models.DO_NOTHING)
     num_nodes = models.IntegerField(null=False, default=0)
     cable_length = models.FloatField(null=False, default=0)
 
@@ -1161,7 +1342,6 @@ class SkeletonSummary(models.Model):
         return "Skeleton {} summary ({} nodes, {} nm)".format(
                 self.skeleton_id, self.num_nodes, self.cable_length)
 
-@python_2_unicode_compatible
 class StatsSummary(models.Model):
     class Meta:
         db_table = "catmaid_stats_summary"
@@ -1197,20 +1377,101 @@ class NodeQueryCache(models.Model):
         unique_together = (('project', 'orientation', 'depth'),)
 
 
-@python_2_unicode_compatible
+class NodeGridCache(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.DO_NOTHING)
+    orientation = models.IntegerField(default=0, null=False)
+    cell_width = models.IntegerField(null=False)
+    cell_height = models.IntegerField(null=False)
+    cell_depth = models.IntegerField(null=False)
+    n_lod_levels = models.IntegerField(null=False, default=1)
+    lod_strategy = models.TextField(null=False, default='quadratic')
+    lod_min_bucket_size = models.IntegerField(null=False, default=500)
+    n_largest_skeletons_limit = models.IntegerField(null=True)
+    n_last_edited_skeletons_limit = models.IntegerField(null=True)
+    hidden_last_editor = models.ForeignKey(User, on_delete=models.DO_NOTHING)
+    allow_empty = models.BooleanField(default=False, null=False)
+    has_json_data = models.BooleanField(default=False, null=False)
+    has_json_text_data = models.BooleanField(default=False, null=False)
+    has_msgpack_data = models.BooleanField(default=False, null=False)
+    enabled = models.BooleanField(default=True, null=False)
+
+    class Meta:
+        db_table = "node_grid_cache"
+        unique_together = (('project', 'orientation', 'cell_width', 'cell_height', 'cell_depth'),)
+
+
+class NodeGridCacheCell(models.Model):
+    grid = models.ForeignKey(NodeGridCache, on_delete=models.DO_NOTHING)
+    x_index = models.IntegerField(null=False)
+    y_index = models.IntegerField(null=False)
+    z_index = models.IntegerField(null=False)
+    update_time = models.DateTimeField(default=timezone.now, null=False)
+    json_data = JSONField(blank=True, null=True)
+    json_text_data = models.TextField(blank=True, null=True)
+    msgpack_data = models.BinaryField(null=True)
+
+    class Meta:
+        db_table = "node_grid_cache_cell"
+        unique_together = (('grid', 'x_index', 'y_index', 'z_index'),)
+
+
+class DirtyNodeGridCacheCell(models.Model):
+    """A dirty cache grid cell. Referential integrety is taken care of on the
+    database level.
+    """
+    #grid_cell = models.OneToOneField(NodeGridCacheCell, on_delete=models.DO_NOTHING, primary_key=True)
+    grid = models.ForeignKey(NodeGridCache, on_delete=models.DO_NOTHING)
+    x_index = models.IntegerField(null=False)
+    y_index = models.IntegerField(null=False)
+    z_index = models.IntegerField(null=False)
+    invalidation_time = models.DateTimeField(default=timezone.now, null=False)
+
+    class Meta:
+        db_table = "dirty_node_grid_cache_cell"
+        unique_together = (('grid', 'x_index', 'y_index', 'z_index'),)
+
+initial_colors = ((1, 0, 0, 1),
+                  (0, 1, 0, 1),
+                  (0, 0, 1, 1),
+                  (1, 0, 1, 1),
+                  (0, 1, 1, 1),
+                  (1, 1, 0, 1),
+                  (1, 1, 1, 1),
+                  (1, 0.5, 0, 1),
+                  (1, 0, 0.5, 1),
+                  (0.5, 1, 0, 1),
+                  (0, 1, 0.5, 1),
+                  (0.5, 0, 1, 1),
+                  (0, 0.5, 1, 1))
+
+
+def distinct_user_color():
+    """ Returns a color for a new user. If there are less users registered than
+    entries in the initial_colors list, the next free color is used. Otherwise,
+    a random color is generated.
+    """
+    nr_users = User.objects.exclude(id__exact=-1).count()
+
+    if nr_users < len(initial_colors):
+        distinct_color = initial_colors[nr_users] # type: Tuple
+    else:
+        distinct_color = colorsys.hsv_to_rgb(random(), random(), 1.0) + (1,)
+
+    return distinct_color
+
+
 class UserProfile(models.Model):
     """ A class that stores a set of custom user preferences.
     See: http://digitaldreamer.net/blog/2010/12/8/custom-user-profile-and-extend-user-admin-django/
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    independent_ontology_workspace_is_default = models.BooleanField(default=settings.PROFILE_INDEPENDENT_ONTOLOGY_WORKSPACE_IS_DEFAULT)
-    show_text_label_tool = models.BooleanField(default=settings.PROFILE_SHOW_TEXT_LABEL_TOOL)
-    show_tagging_tool = models.BooleanField(default=settings.PROFILE_SHOW_TAGGING_TOOL)
-    show_cropping_tool = models.BooleanField(default=settings.PROFILE_SHOW_CROPPING_TOOL)
-    show_segmentation_tool = models.BooleanField(default=settings.PROFILE_SHOW_SEGMENTATION_TOOL)
-    show_tracing_tool = models.BooleanField(default=settings.PROFILE_SHOW_TRACING_TOOL)
-    show_ontology_tool = models.BooleanField(default=settings.PROFILE_SHOW_ONTOLOGY_TOOL)
-    show_roi_tool = models.BooleanField(default=settings.PROFILE_SHOW_ROI_TOOL)
+    independent_ontology_workspace_is_default = models.BooleanField(default=False)
+    show_text_label_tool = models.BooleanField(default=False)
+    show_tagging_tool = models.BooleanField(default=False)
+    show_cropping_tool = models.BooleanField(default=False)
+    show_tracing_tool = models.BooleanField(default=False)
+    show_ontology_tool = models.BooleanField(default=False)
+    show_roi_tool = models.BooleanField(default=False)
     color = RGBAField(default=distinct_user_color)
 
     def __str__(self):
@@ -1237,7 +1498,6 @@ class UserProfile(models.Model):
         pdict['show_text_label_tool'] = self.show_text_label_tool
         pdict['show_tagging_tool'] = self.show_tagging_tool
         pdict['show_cropping_tool'] = self.show_cropping_tool
-        pdict['show_segmentation_tool'] = self.show_segmentation_tool
         pdict['show_tracing_tool'] = self.show_tracing_tool
         pdict['show_ontology_tool'] = self.show_ontology_tool
         pdict['show_roi_tool'] = self.show_roi_tool
@@ -1255,7 +1515,6 @@ def create_user_profile(sender, instance, created, **kwargs):
         profile.show_text_label_tool = settings.PROFILE_SHOW_TEXT_LABEL_TOOL
         profile.show_tagging_tool = settings.PROFILE_SHOW_TAGGING_TOOL
         profile.show_cropping_tool = settings.PROFILE_SHOW_CROPPING_TOOL
-        profile.show_segmentation_tool = settings.PROFILE_SHOW_SEGMENTATION_TOOL
         profile.show_tracing_tool = settings.PROFILE_SHOW_TRACING_TOOL
         profile.show_ontology_tool = settings.PROFILE_SHOW_ONTOLOGY_TOOL
         profile.show_roi_tool = settings.PROFILE_SHOW_ROI_TOOL
@@ -1279,6 +1538,107 @@ def add_user_to_default_groups(sender, instance, created, **kwargs):
 
 # Connect the User model's post save signal to default group assignment
 post_save.connect(add_user_to_default_groups, sender=User)
+
+
+class UserOptionProxy():
+
+    def __init__(self, options):
+        self.options = options
+
+    def __getattr__(self, attr):
+        return getattr(self.options, attr)
+
+    def __str__(self):
+        return "auth.user"
+
+
+class ReducedInfoUser(models.Model):
+    """
+    This abstract model is only used during export of users with minimal
+    information. It doesn't seem to be possible to use Django's serializer with
+    subsets of fields if not all fields are of the same type. This behavior is
+    however needed during export, and the only way so to do this it seems, is
+    using a custom proxxy model.
+    """
+
+    id = models.IntegerField(_('id'), primary_key=True)
+    username = models.CharField(_('username'), max_length=150)
+    password = models.CharField(_('password'), max_length=150)
+
+    def __init__(self, *args, **kwargs):
+        super(ReducedInfoUser, self).__init__(*args, **kwargs)
+
+        # Override meta class model information for export. This is needed to
+        # write out the correct model information (auth.user) for this class.
+        self._meta = UserOptionProxy(self._meta)
+
+    class Meta:
+        managed = False
+        abstract = True
+
+
+class ExportUser(models.Model):
+    """
+    This abstract model is only used during export of users with most relevant
+    information. It doesn't seem to be possible to use Django's serializer with
+    subsets of fields if not all fields are of the same type. This behavior is
+    however needed during export, and the only way so to do this it seems, is
+    using a custom proxxy model.
+    """
+
+    id = models.IntegerField(_('id'), primary_key=True)
+    username = models.CharField(_('username'), max_length=150)
+    password = models.CharField(_('password'), max_length=150)
+    first_name = models.CharField(_('first name'), max_length=30, blank=True)
+    last_name = models.CharField(_('last name'), max_length=30, blank=True)
+    email = models.EmailField(_('email address'), blank=True)
+    date_joined = models.DateTimeField(_('date joined'))
+
+    def __init__(self, *args, **kwargs):
+        super(ExportUser, self).__init__(*args, **kwargs)
+
+        # Override meta class model information for export. This is needed to
+        # write out the correct model information (auth.user) for this class.
+        self._meta = UserOptionProxy(self._meta)
+
+    class Meta:
+        managed = False
+        abstract = True
+
+
+class GroupInactivityPeriod(models.Model):
+    """
+    Link groups to time ranges. If users are member of this groups they are
+    supposed to be active within the respective time range. If users fail to do
+    so, they are set to inactive. An optional reason can be specified as well as
+    a set of contact users.
+    """
+    # The database will perform cascading deletes
+    group = models.ForeignKey(Group, on_delete=models.DO_NOTHING,
+            help_text='This inactivity period applies to users of this group.')
+    max_inactivity = models.DurationField(default=timedelta(days=365),
+            help_text='The time after which a user of the linked groups should be marked inactive.')
+    message = models.TextField(blank=True, null=True,
+            help_text='An optional message that is shown instead of the default text in the front-end.')
+    comment = models.TextField(blank=True, null=True,
+            help_text='An optional internal comment. It is displayed nowhere.')
+
+    class Meta:
+        db_table = 'catmaid_group_inactivity_period'
+
+
+class GroupInactivityPeriodContact(models.Model):
+    """A contact person for a particular deactivation group.
+    """
+    # The database will perform cascading deletes
+    inactivity_period = models.ForeignKey(GroupInactivityPeriod, on_delete=models.DO_NOTHING,
+            help_text='The inactivity period the linked user should act as contact person for.')
+    # The database will perform cascading deletes
+    user = models.ForeignKey(User, on_delete=models.DO_NOTHING,
+            help_text='The cantact person for the linked inactivity group.')
+
+    class Meta:
+        db_table = 'catmaid_group_inactivity_period_contact'
 
 
 class ChangeRequest(UserFocusedModel):
@@ -1305,10 +1665,6 @@ class ChangeRequest(UserFocusedModel):
 
     # TODO: get the project from the treenode/connector so it doesn't have to specified when creating a request
 
-    def status_name(self):
-        self.is_valid() # Make sure invalid state is current
-        return ['Open', 'Approved', 'Rejected', 'Invalid'][self.status]
-
     def is_valid(self):
         """ Returns a boolean value indicating whether the change request is still valid."""
 
@@ -1316,20 +1672,25 @@ class ChangeRequest(UserFocusedModel):
             # Run the request's validation code snippet to determine whether it is still valid.
             # The action is required to set a value for the is_valid variable.
             try:
-                exec(self.validate_action)
-                if 'is_valid' not in dir():
+                _locals = {}
+                exec(self.validate_action, globals(), _locals)
+                if 'is_valid' not in _locals:
                     raise Exception('validation action did not define is_valid')
-                if not is_valid:
+                if not is_valid: # type: ignore
                     # Cache the result so we don't have to do the exec next time.
                     # TODO: can a request ever be temporarily invalid?
                     self.status = ChangeRequest.INVALID
                     self.save()
             except Exception as e:
-                raise Exception('Could not validate the request (%s)', str(e))
+                raise Exception('Could not validate the request (%s)' % str(e))
         else:
             is_valid = False
 
         return is_valid
+
+    def status_name(self):
+        self.is_valid() # Make sure invalid state is current
+        return ['Open', 'Approved', 'Rejected', 'Invalid'][self.status]
 
     def approve(self, *args, **kwargs):
         if not self.is_valid():

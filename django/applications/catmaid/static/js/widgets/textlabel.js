@@ -46,8 +46,7 @@ function TextlabelTool()
    * create a textlabel on the server
    */
   var createTextlabel = function (tlx, tly, tlz, tlr, scale) {
-    //requestQueue.register('model/textlabel.create.php', 'POST', {
-    requestQueue.register(django_url + project.id + '/textlabel/create', 'POST', {
+    let params = {
       pid: project.id,
       x: tlx,
       y: tly,
@@ -60,20 +59,13 @@ function TextlabelTool()
       scaling: (document.getElementById("fontscaling").checked ? 1 : 0),
       font_size: (document.getElementById("fontscaling").checked ? Math.max(16 / scale, parseInt(document.getElementById("fontsize").value)) : parseInt(document.getElementById("fontsize").value)) * tlr,
       font_style: (document.getElementById("fontstylebold").checked ? "bold" : "")
-    }, function (status, text, xml) {
-      CATMAID.statusBar.replaceLast(text);
-      if (status == 200) {
-        // icon_text_apply.style.display = "none";
+    };
+
+    CATMAID.fetch(project.id + '/textlabel/create', 'POST', params)
+      .then(function() {
         self.updateTextlabels();
-        if (text && text != " ") {
-          var e = JSON.parse(text);
-          if (e.error) {
-            alert(e.error);
-          } else {}
-        }
-      }
-      return true;
-    });
+      })
+      .catch(CATMAID.handleError);
   };
 
   var createTextlabelLayer = function( parentStackViewer )
@@ -87,8 +79,8 @@ function TextlabelTool()
     // register the move toolbar and reuse the mouseCatcher
     self.prototype.register( parentStackViewer, "edit_button_move" );
     // view is the mouseCatcher now
-    var proto_onmousedown = self.prototype.mouseCatcher.onmousedown;
-    self.prototype.mouseCatcher.onmousedown = function( e ) {
+    var proto_onpointerdown = self.prototype.mouseCatcher.onpointerdown;
+    self.prototype.mouseCatcher.onpointerdown = function( e ) {
       switch ( CATMAID.ui.getMouseButton( e ) )
       {
         case 1:
@@ -103,10 +95,10 @@ function TextlabelTool()
             }
           break;
         case 2:
-          proto_onmousedown( e );
+          proto_onpointerdown( e );
           break;
         default:
-          proto_onmousedown( e );
+          proto_onpointerdown( e );
           break;
       }
     };
@@ -139,11 +131,11 @@ function TextlabelTool()
     }
   };
 
-  /** Inactivate only onmousedown, given that the others are injected when onmousedown is called.
+  /** Inactivate only onpointerdown, given that the others are injected when onpointerdown is called.
    * Leave alone onmousewheel: it is different in every browser, and it cannot do any harm to have it active. */
   var inactivateBindings = function() {
     var c = self.prototype.mouseCatcher;
-    ['onmousedown'].map(
+    ['onpointerdown'].map(
       function ( fn ) {
         if (c[fn]) {
           bindings[fn] = c[fn];
@@ -162,7 +154,7 @@ function TextlabelTool()
   };
 
   /**
-   * unregister all stack viewer related mouse and keyboard controls
+   * unregister all stack viewer related pointer and keyboard controls
    */
   this.unregister = function()
   {
@@ -436,11 +428,8 @@ Textlabel = function(
   var apply = function( e )
   {
     icon_apply.style.display = "block";
-    requestQueue.replace(
-      //"model/textlabel.update.php",
-            django_url + project.id + '/textlabel/update',
-      "POST",
-      {
+
+    let params = {
         pid : project.id,
         tid : self.id,
         text : self.text,
@@ -457,48 +446,36 @@ Textlabel = function(
         font_style : self.fontStyle,
         font_name : self.fontName,
         offset_left : self.offset.left,
-        offset_top : self.offset.top },
-      function( status, text, xml )
-      {
-        if ( status == 200 )
-        {
-          icon_apply.style.display = "none";
-          if ( text && text != " " )
-          {
-            var e = JSON.parse(text);
-            if ( e.error )
-            {
-              alert( e.error );
-            }
-            else
-            {
-            }
-          }
-        }
-        return true;
-      },
-      "textlabel_" + this.id );
+        offset_top : self.offset.top
+    };
+
+    CATMAID.fetch(project.id + '/textlabel/update', "POST", params, false,
+        "textlabel_" + this.id, true)
+      .then(function() {
+        icon_apply.style.display = 'none';
+        CATMAID.msg("Success", "Text label updated");
+      })
+      .catch(CATMAID.handleError);
   };
 
   var close = function( e )
   {
     icon_apply.style.display = "block";
 
-    requestQueue.register(
-            django_url + project.id + '/textlabel/delete',
-      'POST',
-      {
-        pid : project.id,
-        tid : self.id,
-        x : self.location.x,
-        y : self.location.y,
-        z : self.location.z
-      },
-      function () {
+    let params = {
+      pid : project.id,
+      tid : self.id,
+      x : self.location.x,
+      y : self.location.y,
+      z : self.location.z
+    } ;
+
+    CATMAID.fetch(project.id + '/textlabel/delete', 'POST', params)
+      .then(function () {
         icon_apply.style.display = 'none';
         window.resize();
-      }); // TODO: what is the proper way to call updateTextlabels of the tool?
-            // the window.onresize solution calls onresize about 6 times
+      })
+      .catch(CATMAID.handleError);
   };
 
   /**
@@ -613,7 +590,7 @@ Textlabel = function(
     return true;
   };
 
-  var movemousemove = function( e )
+  var movepointermove = function( e )
   {
     self.location.x += CATMAID.ui.diffX  / scale * resolution.x;
     self.location.y += CATMAID.ui.diffY  / scale * resolution.y;
@@ -624,23 +601,23 @@ Textlabel = function(
     return false;
   };
 
-  var movemouseup = function( e )
+  var movepointerup = function( e )
   {
     apply();
     CATMAID.ui.releaseEvents();
-    CATMAID.ui.removeEvent( "onmousemove", movemousemove );
-    CATMAID.ui.removeEvent( "onmouseup", movemouseup );
+    CATMAID.ui.removeEvent( "onpointermove", movepointermove );
+    CATMAID.ui.removeEvent( "onpointerup", movepointerup );
     return false;
   };
 
-  var movemousedown = function( e )
+  var movepointerdown = function( e )
   {
     self.register( e );
 
-    CATMAID.ui.registerEvent( "onmousemove", movemousemove );
-    CATMAID.ui.registerEvent( "onmouseup", movemouseup );
+    CATMAID.ui.registerEvent( "onpointermove", movepointermove );
+    CATMAID.ui.registerEvent( "onpointerup", movepointerup );
     CATMAID.ui.catchEvents( "move" );
-    CATMAID.ui.onmousedown( e );
+    CATMAID.ui.onpointerdown( e );
 
     //! this is a dirty trick to remove the focus from input elements when clicking the stack views, assumes, that document.body.firstChild is an empty and useless <a></a>
     document.body.firstChild.focus();
@@ -648,7 +625,7 @@ Textlabel = function(
     return false;
   };
 
-  var closemousedown = function( e )
+  var closepointerdown = function( e )
   {
     // prevent possible call of apply() onblur
     textArea.onblur = null;
@@ -723,13 +700,13 @@ Textlabel = function(
   var moveHandle = document.createElement( "div" );
   moveHandle.className = "moveHandle";
   moveHandle.title = "move";
-  moveHandle.onmousedown = movemousedown;
+  moveHandle.onpointerdown = movepointerdown;
   view.appendChild( moveHandle );
 
   var closeHandle = document.createElement( "div" );
   closeHandle.className = "closeHandle";
   closeHandle.title = "delete";
-  closeHandle.onmousedown = closemousedown;
+  closeHandle.onpointerdown = closepointerdown;
   view.appendChild( closeHandle );
 
 
@@ -843,39 +820,21 @@ TextlabelLayer = function(
     var coordinates = stackViewer.projectCoordinates();
     var resolution = stackViewer.primaryStack.resolution;
 
-    requestQueue.register(
-            django_url + project.id + '/textlabel/all',
-      'POST',
-      {
-        pid : stackViewer.getProject().getId(),
-        sid : stackViewer.primaryStack.id,
-        z : coordinates.z,
-        top : y,
-        left : x,
-        width : width,
-        height : height,
-        //scale : ( stack.getMode() == Stack.EDIT_TEXT ? 1 : scale ), // should we display all textlabels when being in text-edit mode?  could be really cluttered
-        scale : scale,
-        resolution : resolution.y
-      },
-      handle_update );
-  };
+    let params = {
+      pid : stackViewer.getProject().getId(),
+      sid : stackViewer.primaryStack.id,
+      z : coordinates.z,
+      top : y,
+      left : x,
+      width : width,
+      height : height,
+      //scale : ( stack.getMode() == Stack.EDIT_TEXT ? 1 : scale ), // should we display all textlabels when being in text-edit mode?  could be really cluttered
+      scale : scale,
+      resolution : resolution.y
+    };
 
-  /**
-   * handle an update-textlabels-request answer
-   *
-   */
-  var handle_update = function( status, text, xml )
-  {
-    var check = $('#textlabeleditable').prop("checked");
-    if ( 200 === status )
-    {
-      //alert( "data: " + text );
-      var e = JSON.parse(text);
-      if ( e.error )
-        alert( e.error );
-      else
-      {
+    CATMAID.fetch(project.id + '/textlabel/all', 'POST', params)
+      .then(function(e) {
         var stackWindowFrame = stackWindow.getFrame();
         //! remove old text labels
         while ( textlabels.length > 0 )
@@ -909,8 +868,10 @@ TextlabelLayer = function(
             t.redraw( pl, pt, new_scale );
           }
         }
-      }
-    }
+      })
+      .catch(CATMAID.handleError)
+      .then(function() {
+        var check = $('#textlabeleditable').prop("checked");
+      });
   };
-
 };

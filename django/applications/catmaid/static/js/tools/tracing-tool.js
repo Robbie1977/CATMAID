@@ -21,6 +21,9 @@
     this.autoCacheUpdateIntervalLength = 60*60*1000;
     this.autoCacheUpdateInterval = null;
     this.refreshAutoCacheUpdate();
+    // Keep a reference to the current and last selected skeleton.
+    this.lastSkeletonId = null;
+    this.currentSkeletonId = null;
 
     /**
      * Return the stack viewer referenced by the active node, or otherwise (if
@@ -34,6 +37,9 @@
 
     var getActiveNodeTracingLayer = function() {
       var stackViewer = getActiveNodeStackViewer();
+      if (!stackViewer) {
+        return null;
+      }
       var tracingLayer = stackViewer.getLayer(getTracingLayerName(stackViewer));
       if (!tracingLayer) {
         throw new CATMAID.ValueError("Can't find tracing layer for active node");
@@ -64,24 +70,21 @@
      *                               to the cursor position.
      * @returns The ID of the cloesest node or null if no node was found.
      */
-    var getClosestNode = function(maxDistancePx) {
+    this.getClosestNode = function(maxDistancePx) {
       maxDistancePx = CATMAID.tools.getDefined(maxDistancePx, 100.0);
       // Give all layers a chance to activate a node
       var selectedNode = null;
       var layers = activeStackViewer.getLayers();
       var layerOrder = activeStackViewer.getLayerOrder();
-      // TODO: Don't use internal objects of the tracing overlay, i.e. find
-      // a better way to get the current mouse position.
-      var x = activeTracingLayer.tracingOverlay.coords.lastX;
-      var y = activeTracingLayer.tracingOverlay.coords.lastY;
-      var z = activeTracingLayer.tracingOverlay.stackViewer.z;
+
+      let coords = self.prototype.lastPointerCoordsS;
       // Only allow nodes that are screen space 50px or closer
       var r = maxDistancePx / activeStackViewer.scale;
       for (var i = layerOrder.length - 1; i >= 0; --i) {
         // Read layers from top to bottom
         var l = layers.get(layerOrder[i]);
         if (CATMAID.tools.isFn(l.getClosestNode)) {
-          var candidateNode = l.getClosestNode(x, y, z, r);
+          var candidateNode = l.getClosestNode(coords.x, coords.y, coords.z, r);
           if (candidateNode && (!selectedNode || candidateNode.distsq < selectedNode.distsq)) {
             selectedNode = candidateNode;
           }
@@ -162,13 +165,16 @@
     /**
      * Create new mouse bindings for the layer's view.
      */
-    function createMouseBindings(stackViewer, layer, mouseCatcher) {
+    function createPointerBindings(stackViewer, layer, mouseCatcher) {
       // A handle to a delayed update
       var updateTimeout;
 
-      var proto_onmousedown = mouseCatcher.onmousedown;
-      var stackViewerBindings = {
-        onmousedown: function( e ) {
+      // Remove navigator's pointer down handling and replace it with our own.
+      var proto_onpointerdown = self.prototype._onpointerdown;
+      mouseCatcher.removeEventListener('pointerdown', proto_onpointerdown);
+
+      var overlayBindings = {
+        pointerdown: function( e ) {
           var mouseButton = CATMAID.ui.getMouseButton(e);
           // Left mouse click will delegate to tracing overlay
           var fallback = false;
@@ -179,12 +185,14 @@
               layer.tracingOverlay.whenclicked( e );
             }
           }
-          // Right mouse button will pan view. And so will the left mouse button
-          // if the tracing overlay returned false.
-          if (mouseButton === 2 || fallback) {
+
+          // Right mouse button and middle mouse button will pan view. And soma
+          // will the left mouse button if the tracing overlay returned false.
+          if (mouseButton === 2 || mouseButton === 3 || fallback) {
             fallback = false;
-            // Put all tracing layers, except active, in "don't update" mode
-            setTracingLayersSuspended(true, true);
+            // Put all tracing layers in "don't update" mode during move,
+            // optionally except the active layer
+            setTracingLayersSuspended(true, layer.updateWhilePanning);
 
             // Attach to the node limit hit event to disable node updates
             // temporary if the limit was hit. This allows for smoother panning
@@ -197,15 +205,14 @@
               updateTimeout = undefined;
             }
 
-            // Handle mouse event
-            proto_onmousedown( e );
+            // Handle pointer event
+            proto_onpointerdown( e );
 
-            CATMAID.ui.registerEvent( "onmousemove", updateStatusBar );
-            CATMAID.ui.registerEvent( "onmouseup",
-              function onmouseup (e) {
-                CATMAID.ui.releaseEvents();
-                CATMAID.ui.removeEvent( "onmousemove", updateStatusBar );
-                CATMAID.ui.removeEvent( "onmouseup", onmouseup );
+            CATMAID.ui.registerEvent( "onpointermove", updateStatusBar );
+            CATMAID.ui.registerEvent( "onpointerup",
+              function onpointerup (e) {
+                CATMAID.ui.removeEvent( "onpointermove", updateStatusBar );
+                CATMAID.ui.removeEvent( "onpointerup", onpointerup );
                 layer.tracingOverlay.off(layer.tracingOverlay.EVENT_HIT_NODE_DISPLAY_LIMIT,
                     disableLayerUpdate, layer);
                 if (layer.tracingOverlay.suspended) {
@@ -227,23 +234,25 @@
                   // updated through the move already.
                   updateNodesInTracingLayers(true);
                 }
+
+                layer.tracingOverlay.updateCursor();
               });
           }
 
           // If fallback has been set to true, delegate to prototype.
           if (fallback) {
-            proto_onmousedown( e );
+            proto_onpointerdown( e );
           }
         }
       };
 
       // Assign bindings to view
       var view = layer.tracingOverlay.view;
-      for (var fn in stackViewerBindings) {
-        view[fn] = stackViewerBindings[fn];
+      for (var fn in overlayBindings) {
+        view.addEventListener(fn, overlayBindings[fn]);
       }
 
-      bindings.set(stackViewer, stackViewerBindings);
+      bindings.set(stackViewer, overlayBindings);
     }
 
     /**
@@ -279,6 +288,11 @@
       return layer;
     }
 
+    function prepareAndUpdateStackViewer(stackViewer) {
+      let layer = prepareStackViewer(stackViewer);
+      layer.forceRedraw();
+    }
+
     /**
      * Remove the neuron name display and the tacing layer from a stack view.
      */
@@ -309,9 +323,6 @@
 
       setupSubTools();
 
-      // Update annotation cache for the current project
-      CATMAID.annotations.update();
-
       // Get or create the tracing layer for this stack viewer
       var layer = prepareStackViewer(parentStackViewer);
 
@@ -320,24 +331,28 @@
       self.prototype.setMouseCatcher(view);
 
       // Register stack viewer with prototype, after the mouse catcher has been set.
-      // This attaches mouse handlers to the view.
+      // This attaches pointer handlers to the view.
       self.prototype.register(parentStackViewer, "edit_button_trace");
 
+      // Initialize button state
       document.getElementById( "trace_button_togglelabels" ).className =
           CATMAID.TracingTool.Settings.session.show_node_labels ? "button_active" : "button";
 
-      // Try to get existing mouse bindings for this layer
-      if (!bindings.has(parentStackViewer)) createMouseBindings(parentStackViewer, layer, view);
+      document.getElementById( "trace_button_togglecolorlength" ).className =
+          CATMAID.TracingOverlay.Settings.session.color_by_length ? "button_active" : "button";
+
+      // Try to get existing pointer bindings for this layer
+      if (!bindings.has(parentStackViewer)) createPointerBindings(parentStackViewer, layer, view);
 
       // Force an update and skeleton tracing mode if stack viewer or layer changed
       if (activeTracingLayer !== layer || activeStackViewer !== parentStackViewer) {
-        SkeletonAnnotations.setTracingMode(SkeletonAnnotations.MODES.SKELETON);
-        layer.tracingOverlay.updateNodes();
+        SkeletonAnnotations.setTracingMode(SkeletonAnnotations.currentmode);
+        this.handleChangedInteractionMode(SkeletonAnnotations.currentmode);
       }
 
       activeStackViewer = parentStackViewer;
       activeTracingLayer = layer;
-      activateBindings(parentStackViewer);
+      activateBindings(parentStackViewer, layer);
     };
 
     /**
@@ -349,7 +364,7 @@
       var handlers = bindings.get(stackViewer);
       var c = self.prototype.mouseCatcher;
       for (var fn in handlers) {
-        if (c[fn]) delete c[fn];
+        c.removeEventListener(fn, handlers[fn]);
       }
     };
 
@@ -357,13 +372,17 @@
      * Replace bindings of the mouse catcher with the stored bindings for the
      * given stack viewer.
      */
-    var activateBindings = function(stackViewer) {
-      var stackViewerBindings = bindings.get(stackViewer);
+    var activateBindings = function(stackViewer, layer) {
+
+      // Make sure the parent navigator doesn't handle clicks.
+      var view = layer.tracingOverlay.view;
+      var proto_onpointerdown = self.prototype._onpointerdown;
+      view.removeEventListener('pointerdown', proto_onpointerdown);
+
+      var handlers = bindings.get(stackViewer);
       var c = self.prototype.mouseCatcher;
-      for (var b in stackViewerBindings) {
-        if (stackViewerBindings.hasOwnProperty(b)) {
-          c[b] = stackViewerBindings[b];
-        }
+      for (var fn in handlers) {
+        c.addEventListener(fn, handlers[fn]);
       }
     };
 
@@ -386,10 +405,12 @@
      * handlers, toggle off tool activity signals (like buttons)
      */
     this.destroy = function() {
-      project.off(CATMAID.Project.EVENT_STACKVIEW_ADDED, prepareStackViewer, this);
+      project.off(CATMAID.Project.EVENT_STACKVIEW_ADDED, prepareAndUpdateStackViewer, this);
       project.off(CATMAID.Project.EVENT_STACKVIEW_CLOSED, closeStackViewer, this);
       SkeletonAnnotations.off(SkeletonAnnotations.EVENT_ACTIVE_NODE_CHANGED,
           handleActiveNodeChange, this);
+      SkeletonAnnotations.off(SkeletonAnnotations.EVENT_INTERACTION_MODE_CHANGED,
+          this.handleChangedInteractionMode, this);
 
       project.getStackViewers().forEach(function(stackViewer) {
         closeStackViewer(stackViewer);
@@ -464,7 +485,8 @@
         CATMAID.NeuronNameService.getInstance().registerAll(label.data(), models)
           .then(function() {
             label.text(prefix + CATMAID.NeuronNameService.getInstance().getName(skeletonId));
-          });
+          })
+          .catch(CATMAID.handleError);
       });
     }
 
@@ -473,9 +495,14 @@
      * the top bar is updated.
      */
     function handleActiveNodeChange(node, skeletonChanged) {
+      self.lastSkeletonId = self.currentSkeletonId;
+      self.currentSkeletonId = null;
       if (node && node.id) {
-        if (skeletonChanged && SkeletonAnnotations.TYPE_NODE === node.type) {
-          setActiveElemenTopBarText(node.skeleton_id);
+        if (SkeletonAnnotations.TYPE_NODE === node.type) {
+          if (skeletonChanged) {
+            setActiveElemenTopBarText(node.skeleton_id);
+          }
+          self.currentSkeletonId = node.skeleton_id;
         } else if (SkeletonAnnotations.TYPE_CONNECTORNODE === node.type) {
           if (CATMAID.Connectors.SUBTYPE_SYNAPTIC_CONNECTOR === node.subtype) {
             // Retrieve presynaptic skeleton
@@ -503,6 +530,7 @@
       }
     }
 
+
     this.prototype.changeSlice = function(val, step) {
       val = activeStackViewer.toValidZ(val, step < 0 ? -1 : 1);
       activeStackViewer.moveToPixel( val, activeStackViewer.y, activeStackViewer.x, activeStackViewer.s )
@@ -510,20 +538,18 @@
     };
 
 
+    /**
+     * Display both project and stack space center coordinates in the status
+     * bar.
+     */
     var updateStatusBar = function(e) {
-      var m = CATMAID.ui.getMouse(e, activeTracingLayer.tracingOverlay.view, true);
-      var offX, offY, pos_x, pos_y;
-      if (m) {
-        offX = m.offsetX;
-        offY = m.offsetY;
-
-        // TODO pos_x and pos_y never change
-        var stackViewer = activeStackViewer;
-        // TODO pos_x and pos_y never change
-        pos_x = stackViewer.primaryStack.translation.x + (stackViewer.x + (offX - stackViewer.viewWidth  / 2) / stackViewer.scale) * stackViewer.primaryStack.resolution.x;
-        pos_y = stackViewer.primaryStack.translation.x + (stackViewer.y + (offY - stackViewer.viewHeight / 2) / stackViewer.scale) * stackViewer.primaryStack.resolution.y;
-        CATMAID.statusBar.replaceLast("[" + pos_x.toFixed(3) + ", " + pos_y.toFixed(3) + "]" + " stack x,y: " + stackViewer.x + ", " + stackViewer.y);
-      }
+      CATMAID.statusBar.replaceLast("Project: " +
+          project.coordinates.x.toFixed(3) + ", " +
+          project.coordinates.y.toFixed(3) + ", " +
+          project.coordinates.z.toFixed(3) + " Stack: " +
+          activeStackViewer.x.toFixed(3) + ", " +
+          activeStackViewer.y.toFixed(3) + ", " +
+          activeStackViewer.z.toFixed(3));
       return true;
     };
 
@@ -675,12 +701,13 @@
     }));
 
     this.addAction(new CATMAID.Action({
-      helpText: "Go to nearest open leaf node (subsequent <kbd>Shift</kbd>+<kbd>R</kbd>: cycle through other open leaves; with <kbd>Alt</kbd>: most recent rather than nearest)",
-      keyShortcuts: { "R": [ "r", "Alt + r", "Alt + Shift + r", "Shift + r" ] },
+      helpText: "Go to nearest open leaf node (subsequent <kbd>Shift</kbd>+<kbd>R</kbd>: cycle through other open leaves; with <kbd>Alt</kbd>: most recent rather than nearest, <kbd>Shift</kbd>+<kbd>Alt</kbd>: cycle in reverse)",
+      keyShortcuts: { "R": [ "r", "Alt + r", "Alt + Shift + R", "Shift + r"] },
       run: function (e) {
         if (!CATMAID.mayView())
           return false;
-        activeTracingLayer.tracingOverlay.goToNextOpenEndNode(SkeletonAnnotations.getActiveNodeId(), e.shiftKey, e.altKey);
+        activeTracingLayer.tracingOverlay.goToNextOpenEndNode(SkeletonAnnotations.getActiveNodeId(),
+            e.shiftKey, e.altKey, e.shiftKey && e.altKey);
         return true;
       }
     }));
@@ -810,13 +837,49 @@
     }));
 
     this.addAction(new CATMAID.Action({
-      helpText: "Go to last node edited by you in this skeleton (<kbd>Shift</kbd>: in any skeleton)",
-      keyShortcuts: { "H": [ "h", "Shift + h" ] },
+      helpText: "Go to last node edited by you in active skeleton (no active skeleton: in last active skeleton, <kbd>Shift</kbd>: in any skeleton, <kbd>Alt</kbd>: by anyone)",
+      keyShortcuts: { "H": [ "h", "Shift + h", "Alt + h", "Alt + Shift + h" ] },
       run: function (e) {
         if (!CATMAID.mayView())
           return false;
+        let activeSkeletonId = SkeletonAnnotations.getActiveSkeletonId();
+        let referenceSkeletonId = activeSkeletonId ? activeSkeletonId : self.lastSkeletonId;
         activeTracingLayer.tracingOverlay.goToLastEditedNode(
-          e.shiftKey ? undefined : SkeletonAnnotations.getActiveSkeletonId());
+            e.shiftKey ? undefined : referenceSkeletonId,
+            e.altKey ? undefined : CATMAID.session.user)
+          .then(result => {
+            let user = e.altKey ? 'anyone' : 'you';
+            if (result && result.id) {
+              if (e.shiftKey) {
+                CATMAID.msg(`Selected node last edited by ${user} in any skeleton`, 'Node selection successful');
+              } else {
+                if (activeSkeletonId) {
+                  CATMAID.msg(`Selected node last edited by ${user} in the active skeleton`, 'Node selection successful');
+                } else if (referenceSkeletonId) {
+                  CATMAID.msg(`Selected node last edited by ${user} in last active skeleton`);
+                } else {
+                  CATMAID.warn(`Neither is nor was a skeleton active to look for node last edited by ${user}. Alterantively, use the Shift key for last edit globally.`);
+                }
+              }
+            } else {
+              if (e.shiftKey) {
+                if (e.altKey) {
+                  CATMAID.warn('Could not find any last edited node in any skeleton');
+                } else {
+                  CATMAID.warn('Could not find any node last edited by you in any skeleton');
+                }
+              } else {
+                if (activeSkeletonId) {
+                  CATMAID.warn(`Could not find any node in the active skeleton last edited by ${user}`);
+                } else if (referenceSkeletonId) {
+                  CATMAID.warn(`Could not find any node in the last active skeleton edited by ${user}`);
+                } else {
+                  CATMAID.warn(`Neither is nor was a skeleton active to look for node last edited by ${user}. Alterantively, use the Shift key for last edit globally.`);
+                }
+              }
+            }
+          })
+          .catch(CATMAID.handleError);
         return true;
       }
     }));
@@ -845,12 +908,12 @@
                 if (typeof radius === 'undefined') return;
 
                 var respectVirtualNodes = true;
-                var node = activeTracingLayer.tracingOverlay.nodes[atnID];
+                var node = activeTracingLayer.tracingOverlay.nodes.get(atnID);
                 var selectedIDs = activeTracingLayer.tracingOverlay.findAllNodesWithinRadius(
                     node.x, node.y, node.z,
                     radius, respectVirtualNodes, true);
                 selectedIDs = selectedIDs.map(function (nodeID) {
-                    return activeTracingLayer.tracingOverlay.nodes[nodeID].skeleton_id;
+                    return activeTracingLayer.tracingOverlay.nodes.get(nodeID).skeleton_id;
                 }).filter(function (s) { return !isNaN(s); });
 
                 selectionCallback(selectedIDs);
@@ -876,8 +939,13 @@
       run: function (e) {
         if (!CATMAID.mayEdit())
           return false;
+        var activeNodeId = SkeletonAnnotations.getActiveNodeId();
+        if (!activeNodeId) {
+          CATMAID.warn("No node selected");
+          return false;
+        }
         var tracingLayer = getActiveNodeTracingLayer();
-        tracingLayer.tracingOverlay.splitSkeleton(SkeletonAnnotations.getActiveNodeId());
+        tracingLayer.tracingOverlay.splitSkeleton(activeNodeId);
         return true;
       }
     }));
@@ -915,6 +983,50 @@
 
         document.getElementById( "trace_button_togglelabels" ).className =
             showLabels ? "button_active" : "button";
+
+        return true;
+      }
+    }));
+
+    this.addAction(new CATMAID.Action({
+      helpText: "Toggle coloring by length",
+      buttonName: "togglecolorlength",
+      buttonID: 'trace_button_togglecolorlength',
+      keyShortcuts: { "F7": [ "F7" ] },
+      run: function (e) {
+        if (!CATMAID.mayView())
+          return false;
+
+        var settings = CATMAID.TracingOverlay.Settings;
+        var colorByLength = !settings.session.color_by_length;
+        settings.set('color_by_length', colorByLength, 'session');
+        getTracingLayers().forEach(function(layer) {
+          if (colorByLength) {
+            var source = new CATMAID.ColorSource('length', layer.tracingOverlay);
+            layer.tracingOverlay.setColorSource(source);
+          } else {
+            layer.tracingOverlay.setColorSource();
+          }
+        });
+
+        document.getElementById( "trace_button_togglecolorlength" ).className =
+            colorByLength ? "button_active" : "button";
+
+        return true;
+      }
+    }));
+
+    this.addAction(new CATMAID.Action({
+      helpText: "Measure the distance between two nodes",
+      buttonName: "distance",
+      buttonID: "trace_button_distance",
+      keyShortcuts: { "F8": ["F8"] },
+      run: function(e) {
+        if (!CATMAID.mayView()) {
+          return false;
+        }
+
+        self.measureNodeDistance();
 
         return true;
       }
@@ -1008,14 +1120,14 @@
     }));
 
     this.addAction(new CATMAID.Action({
-      helpText: "Select the nearest node to the mouse cursor",
-      keyShortcuts: { "G": [ "g" ] },
+      helpText: "Select the nearest node to the mouse cursor in the current section (<kbd>Alt</kbd>: globally)",
+      keyShortcuts: { "G": [ "g", "Alt + g" ] },
       run: function (e) {
         if (!CATMAID.mayView())
           return false;
-        if (!(e.ctrlKey || e.metaKey || e.shiftKey)) {
+        if (!(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)) {
           // Only allow nodes that are screen space 50px or closer
-          var selectedNode = getClosestNode(100.0);
+          var selectedNode = self.getClosestNode(100.0);
           if (selectedNode) {
             // If this layer has a node close by, activate it
             var z = activeTracingLayer.stackViewer.primaryStack.projectToStackZ(
@@ -1028,6 +1140,20 @@
                 .catch(CATMAID.handleError);
             }
           }
+          return true;
+        } else if (e.altKey) {
+          let p = self.prototype.lastPointerCoordsP;
+          CATMAID.Nodes.nearestNode(project.id, p.x, p.y, p.z)
+            .then(function(data) {
+              var nodeIDToSelect = data.treenode_id;
+              return SkeletonAnnotations.staticMoveTo(data.z, data.y, data.x)
+                  .then(function () {
+                    return SkeletonAnnotations.staticSelectNode(nodeIDToSelect);
+                  });
+            })
+            .catch(function () {
+              CATMAID.warn('Selecing the globally closed node failed');
+            });
           return true;
         } else {
           return false;
@@ -1055,7 +1181,8 @@
       run: function (e) {
         if (!CATMAID.mayEdit())
           return false;
-        activeTracingLayer.tracingOverlay.deleteActiveNode();
+        activeTracingLayer.tracingOverlay.deleteActiveNode()
+          .catch(CATMAID.handleError);
         return true;
       }
     }));
@@ -1337,7 +1464,7 @@
         if (e.shiftKey) {
           skid = SkeletonAnnotations.getActiveSkeletonId();
         } else {
-          var match = getClosestNode(100.0);
+          var match = self.getClosestNode(100.0);
           if (match) {
             skid = match.node.skeleton_id;
           }
@@ -1350,13 +1477,17 @@
         skeletonModels[skid] = new CATMAID.SkeletonModel(
             skid,
             undefined,
-            new THREE.Color(SkeletonAnnotations.TracingOverlay.Settings.session.active_node_color));
-        var viewersWithoutSkel = Array.from(WindowMaker.getOpenWindows('3d-webgl-view', true).values())
+            new THREE.Color(CATMAID.TracingOverlay.Settings.session.active_node_color));
+        var viewersWithoutSkel = Array.from(WindowMaker.getOpenWindows('3d-viewer', true).values())
             .filter(function (viewer) { return !viewer.hasSkeleton(skid); });
 
         var removePeekingSkeleton = function () {
           viewersWithoutSkel.forEach(function (viewer) {
-            viewer.removeSkeletons([skid]);
+            try {
+              viewer.removeSkeletons([skid]);
+            } catch (error) {
+              console.log("Could not remove peeking skeleton", error);
+            }
             viewer.render();
           });
           self.peekingSkeleton = false;
@@ -1400,7 +1531,7 @@
         const tracingOverlay = activeStackViewer.getLayersOfType(CATMAID.TracingLayer)[0].tracingOverlay;
 
         // force SkeletonAnnotation.atn's attributes (x and y coords) to update
-        tracingOverlay.activateNode(tracingOverlay.nodes[SkeletonAnnotations.getActiveNodeId()]);
+        tracingOverlay.activateNode(tracingOverlay.nodes.get(SkeletonAnnotations.getActiveNodeId()));
         const activeNode = SkeletonAnnotations.atn;
 
         if (!CATMAID.mayEdit()) {
@@ -1508,11 +1639,13 @@
       var result = self.prototype.getMouseHelp();
       result += '<ul>';
       result += '<li><strong>Click on a node:</strong> make that node active</li>';
+      result += '<li><strong>Click in space:</strong> create a new node. Create presynaptic node with active connector.</li>';
       result += '<li><strong><kbd>Ctrl</kbd>+click in space:</strong> deselect the active node</li>';
       result += '<li><strong><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click on a node:</strong> delete that node</li>';
+      result += '<li><strong><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click on an edge:</strong> split skeleton at this location</li>';
       result += '<li><strong><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click on an arrow:</strong> delete that link</li>';
       result += '<li><strong><kbd>Shift</kbd>+click in space:</strong> create a synapse with the active treenode being presynaptic.</li>';
-      result += '<li><strong><kbd>Shift</kbd>+<kbd>Alt</kbd>+click in space:</strong> create a synapse with the active treenode as postsynaptic.</li>';
+      result += '<li><strong><kbd>Shift</kbd>+<kbd>Alt</kbd>+click in space:</strong> create a synapse with the active treenode as postsynaptic. Create presynaptic node with an active connector.</li>';
       result += '<li><strong><kbd>Shift</kbd>+click in space:</strong> create a post-synaptic node (if there was an active connector)</li>';
       result += '<li><strong><kbd>Shift</kbd>+click on a treenode:</strong> join two skeletons (if there was an active treenode)</li>';
       result += '<li><strong><kbd>Alt</kbd>+<kbd>Ctrl</kbd>+click in space:</strong> adds a node along the nearest edge of the active skeleton</li>';
@@ -1531,30 +1664,56 @@
           // Initialize a tracing layer in all available stack viewers, but let
           // register() take care of bindings.
           project.getStackViewers().forEach(function(s) {
-            var layer = prepareStackViewer(s);
-            layer.tracingOverlay.updateNodes(layer.forceRedraw.bind(layer));
-            // s.getView().appendChild(layer.tracingOverlay.view);
+            var layer = prepareAndUpdateStackViewer(s);
           }, this);
         });
     };
 
     // Listen to creation and removal of new stack views in current project.
-    project.on(CATMAID.Project.EVENT_STACKVIEW_ADDED, prepareStackViewer, this);
+    project.on(CATMAID.Project.EVENT_STACKVIEW_ADDED, prepareAndUpdateStackViewer, this);
     project.on(CATMAID.Project.EVENT_STACKVIEW_CLOSED, closeStackViewer, this);
 
     // Listen to active node change events
     SkeletonAnnotations.on(SkeletonAnnotations.EVENT_ACTIVE_NODE_CHANGED,
         handleActiveNodeChange, this);
+
+    // If the interation mode changes, update the UI
+    SkeletonAnnotations.on(SkeletonAnnotations.EVENT_INTERACTION_MODE_CHANGED,
+        this.handleChangedInteractionMode, this);
   }
+
+  /**
+   * Update tracing tool mode button selection state.
+   */
+  TracingTool.prototype.handleChangedInteractionMode = function(newMode, oldMode) {
+    // Deselect all mode buttons
+    document.getElementById("trace_button_move").className = "button";
+    document.getElementById("trace_button_skeleton").className = "button";
+    document.getElementById("trace_button_synapse").className = "button";
+
+    // Activate button for new mode
+    switch (newMode) {
+      case SkeletonAnnotations.MODES.MOVE:
+        document.getElementById("trace_button_move").className = "button_active";
+        break;
+      case SkeletonAnnotations.MODES.SKELETON:
+        document.getElementById("trace_button_skeleton").className = "button_active";
+        break;
+      case SkeletonAnnotations.MODES.SYNAPSE:
+        document.getElementById("trace_button_synapse").className = "button_active";
+        break;
+    }
+  };
 
   /**
    * Refresh various caches, like the annotation cache.
    */
   TracingTool.prototype.refreshCaches = function() {
     return Promise.all([
-      CATMAID.annotations.update(),
+      CATMAID.annotations.update(true),
       CATMAID.NeuronNameService.getInstance().refresh(),
-      SkeletonAnnotations.VisibilityGroups.refresh()
+      SkeletonAnnotations.VisibilityGroups.refresh(),
+      SkeletonAnnotations.FastMergeMode.refresh()
     ]);
   };
 
@@ -1574,6 +1733,128 @@
   };
 
   /**
+   * Measure the distance between the active node and a second node.
+   */
+  TracingTool.prototype.measureNodeDistance = function() {
+    let firstNodeId = SkeletonAnnotations.getActiveNodeId();
+    let skeletonId = SkeletonAnnotations.getActiveSkeletonId();
+    if (!firstNodeId) {
+      CATMAID.warn("Please select first node");
+      return;
+    }
+
+    let secondNodeId = null;
+
+    let getNode = new Promise(function(resolve, reject) {
+      var dialog = new CATMAID.OptionsDialog("Select node", {
+        'Use active node': function() {
+          secondNodeId = SkeletonAnnotations.getActiveNodeId();
+          if (!secondNodeId) {
+            throw new CATMAID.Warning("No node selected");
+          }
+
+          if (firstNodeId === secondNodeId) {
+            throw new CATMAID.Warning("Please select a node different from the first one");
+          }
+
+          let activeSkeletonId = SkeletonAnnotations.getActiveSkeletonId();
+
+          if (skeletonId !== activeSkeletonId) {
+            throw new CATMAID.Warning("The second node isn't part of the same skeleton");
+          }
+
+          let arborTransform;
+          let firstIsVirtual = !SkeletonAnnotations.isRealNode(firstNodeId);
+          let secondIsVirtual = !SkeletonAnnotations.isRealNode(secondNodeId);
+          if (firstIsVirtual || secondIsVirtual) {
+            // If we deal with virtual nodes, insert the virtual node into the
+            // arbor parser to get the exact distance.
+            arborTransform = function(arborParser) {
+              if (firstIsVirtual) {
+                let vnComponents = SkeletonAnnotations.getVirtualNodeComponents(firstNodeId);
+                let parentId = SkeletonAnnotations.getParentOfVirtualNode(firstNodeId, vnComponents);
+                let childId = SkeletonAnnotations.getChildOfVirtualNode(firstNodeId, vnComponents);
+                let vnX = Number(SkeletonAnnotations.getXOfVirtualNode(firstNodeId, vnComponents));
+                let vnY = Number(SkeletonAnnotations.getYOfVirtualNode(firstNodeId, vnComponents));
+                let vnZ = Number(SkeletonAnnotations.getZOfVirtualNode(firstNodeId, vnComponents));
+                arborParser.positions[firstNodeId] = new THREE.Vector3(vnX, vnY, vnZ);
+                arborParser.arbor.edges[firstNodeId] = parentId;
+                arborParser.arbor.edges[childId] = firstNodeId;
+              }
+              if (secondIsVirtual) {
+                let vnComponents = SkeletonAnnotations.getVirtualNodeComponents(secondNodeId);
+                let parentId = SkeletonAnnotations.getParentOfVirtualNode(secondNodeId, vnComponents);
+                let childId = SkeletonAnnotations.getChildOfVirtualNode(secondNodeId, vnComponents);
+                let vnX = Number(SkeletonAnnotations.getXOfVirtualNode(secondNodeId, vnComponents));
+                let vnY = Number(SkeletonAnnotations.getYOfVirtualNode(secondNodeId, vnComponents));
+                let vnZ = Number(SkeletonAnnotations.getZOfVirtualNode(secondNodeId, vnComponents));
+                arborParser.positions[secondNodeId] = new THREE.Vector3(vnX, vnY, vnZ);
+                arborParser.arbor.edges[secondNodeId] = parentId;
+                arborParser.arbor.edges[childId] = firstNodeId;
+              }
+            };
+          }
+
+          resolve(CATMAID.Skeletons.distanceBetweenNodes(project.id, skeletonId,
+              firstNodeId, secondNodeId, arborTransform));
+        }
+      });
+      dialog.appendMessage("Please select a second node on the same skeleton!");
+      dialog.show('auto', 'auto', false);
+    });
+
+    getNode.then(function(length) {
+        var dialog = new CATMAID.OptionsDialog("Node distance", {
+          'Close': function() {},
+        });
+        dialog.appendMessage("The distance between node " +
+            firstNodeId + " and " + secondNodeId + " on skeleton " +
+            skeletonId + " is:");
+        dialog.appendMessage(Math.round(length) + " nm");
+        dialog.show(500, 'auto', false);
+      })
+      .catch(CATMAID.handleError);
+  };
+
+  TracingTool.prototype.getContextHelp = function() {
+    return [
+      '<h1>Tracing tool</h1>',
+      '<p>The Tracing Tool provides access to many tools related ',
+      'to neuron reconstruction and circuit analysis. The widgets ',
+      'displayed in the third batch of icons in the top bar are only ',
+      'a sub-set of the most common tools. More widgets can be opened ',
+      'using the <em>Open Widget Dialog</em>, accessible through ',
+      '<kbd>Ctrl</kbd> + <kbd>Space</em> or the first icon in the top tool ',
+      'bar. </p>',
+      '<p>The first three icons in the second toolbar select the interaction ',
+      'mode, which by default is tracing (first icon). Each click with the <em>',
+      'Left Mouse Button</em> (LMB) will create a new skeleton node or cause an ',
+      'other action, depending on the pressed modifiers (See Help <kbd>F1</kbd>). ',
+      'The second interaction mode is called <em>Synapse Dropping Mode</em>, in ',
+      'which each <em>LMB</em> click will create a new synapse. The last ',
+      'interaction mode is <em>Navigation Mode</em>, in which both LMB and RMB ',
+      'drag events cause planar movement.</p>',
+      '<h1>Navigation</h1>',
+      '<p>The <em>Right Mouse Button</em> (RMB) can be used to move in the plane ',
+      '(pan) as well as the <em>Arrow Keys</em>. The coordinates of the current ',
+      'location in <em>stack space</em> are displayed in the <em>X</em> and ',
+      '<em>Y</em> input boxes in the second tool bar. This two sliders in the ',
+      'toolbar allow to change <em>Z</em> and the <em>Zoom Level</em>. The ',
+      'lower right corner displays the current location in both <em>stack space</em> ',
+      'and <em>physical space</em> in the status bar.</p>',
+      '<h1>Neuron handling</h1>',
+      '<p>The Tracing Tool will add a <em>Tracing Layer</em> to all open Stack ',
+      'Viewers. In skeletons consisting of "treenodes" and edges model neurons in ',
+      'the underlying image data. New nodes can be created by clicking the LMB or ',
+      'by using the <kbd>Z</kbd> key. Synapses can be created using <kbd>Shift</kbd> ',
+      '+ LMB. These actions can be undone using <kbd>Ctrl</kbd> + <kbd>Z</kbd></p>. ',
+      '<p>Generally, nodes can be selected either by clicking or by selecting the node ',
+      'closest to the mouse cursor using the <kbd>G</kbd> key. This is especially ',
+      'useful in Navigation Mode.</p>'
+    ].join('');
+  };
+
+  /**
    * Move to and select a node in the specified neuron or skeleton nearest
    * the current project position.
    *
@@ -1583,25 +1864,19 @@
    */
   TracingTool.goToNearestInNeuronOrSkeleton = function(type, objectID) {
     var projectCoordinates = project.focusedStackViewer.projectCoordinates();
-    var parameters = {
-      x: projectCoordinates.x,
-      y: projectCoordinates.y,
-      z: projectCoordinates.z
-    };
-    parameters[type + '_id'] = objectID;
-    return CATMAID.fetch(project.id + "/node/nearest", "POST", parameters)
-        .then(function (data) {
-          var nodeIDToSelect = data.treenode_id;
-          // var skeletonIDToSelect = data.skeleton_id; // Unused, but available.
-          return SkeletonAnnotations.staticMoveTo(data.z, data.y, data.x)
-              .then(function () {
-                return SkeletonAnnotations.staticSelectNode(nodeIDToSelect);
-              });
-        })
-        .catch(function () {
-          CATMAID.warn('Going to ' + type + ' ' + objectID + ' failed. ' +
-                       'The ' + type + ' may no longer exist.');
-        });
+    return CATMAID.Nodes.nearestNode(project.id, projectCoordinates.x,
+        projectCoordinates.y, projectCoordinates.z, objectID, type)
+      .then(function (data) {
+        var nodeIDToSelect = data.treenode_id;
+        return SkeletonAnnotations.staticMoveTo(data.z, data.y, data.x)
+            .then(function () {
+              return SkeletonAnnotations.staticSelectNode(nodeIDToSelect);
+            });
+      })
+      .catch(function () {
+        CATMAID.warn('Going to ' + type + ' ' + objectID + ' failed. ' +
+                     'The ' + type + ' may no longer exist.');
+      });
   };
 
   /**
@@ -1614,7 +1889,7 @@
       buttonID: "data_button_review",
       buttonName: 'table_review',
       run: function (e) {
-        WindowMaker.show('review-system');
+        WindowMaker.show('review-widget');
         return true;
       }
     }),
@@ -1744,7 +2019,7 @@
       buttonID: "view_3d_webgl_button",
       buttonName: '3d-view-webgl',
       run: function (e) {
-        WindowMaker.create('3d-webgl-view');
+        WindowMaker.create('3d-viewer');
       }
     }),
 
@@ -1803,7 +2078,7 @@
           },
           show_node_labels: {
             default: false
-          }
+          },
         },
         migrations: {}
       });

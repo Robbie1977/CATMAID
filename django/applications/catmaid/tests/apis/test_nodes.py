@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
-import six
 
 from django.db import connection
 
@@ -19,7 +17,7 @@ class NodesApiTests(CatmaidApiTestCase):
         # Test without skeleton filter.
         most_recent_node_id = 2465
 
-        response = self.client.post(
+        response = self.client.get(
                 '/%d/nodes/most-recent' % self.test_project_id)
         self.assertEqual(response.status_code, 200)
         parsed_response = json.loads(response.content.decode('utf-8'))
@@ -35,7 +33,7 @@ class NodesApiTests(CatmaidApiTestCase):
         most_recent_node_id = 2423
         skeleton_id = 2411
 
-        response = self.client.post(
+        response = self.client.get(
                 '/%d/nodes/most-recent' % self.test_project_id,
                 {'skeleton_id': skeleton_id})
         self.assertEqual(response.status_code, 200)
@@ -51,8 +49,8 @@ class NodesApiTests(CatmaidApiTestCase):
 
     def test_node_nearest_for_skeleton(self):
         self.fake_authentication()
-        response = self.client.post(
-                '/%d/node/nearest' % self.test_project_id,
+        response = self.client.get(
+                '/%d/nodes/nearest' % self.test_project_id,
                 {
                     'x': 5115,
                     'y': 3835,
@@ -72,8 +70,8 @@ class NodesApiTests(CatmaidApiTestCase):
 
     def test_node_nearest_for_neuron(self):
         self.fake_authentication()
-        response = self.client.post(
-                '/%d/node/nearest' % self.test_project_id,
+        response = self.client.get(
+                '/%d/nodes/nearest' % self.test_project_id,
                 {
                     'x': 5115,
                     'y': 3835,
@@ -148,7 +146,7 @@ class NodesApiTests(CatmaidApiTestCase):
             [367, 7030.0, 1980.0, 0.0],
             [387, 9030.0, 1480.0, 0.0]
         ]
-        six.assertCountEqual(self, expected_result, parsed_response)
+        self.assertCountEqual(expected_result, parsed_response)
         self.assertEqual(sorted(expected_result), sorted(parsed_response))
 
 
@@ -433,7 +431,7 @@ class NodesApiTests(CatmaidApiTestCase):
                 # Treat links separately, because they come in a list of
                 # unspecified different order.
                 if 7 == n:
-                    six.assertCountEqual(self, row[n], parsed_row[n])
+                    self.assertCountEqual(row[n], parsed_row[n])
                 else:
                     self.assertEqual(e, parsed_row[n])
 
@@ -513,7 +511,7 @@ class NodesApiTests(CatmaidApiTestCase):
                 # Treat links separately, because they come in a list of
                 # unspecified different order.
                 if 7 == n:
-                    six.assertCountEqual(self, row[n], parsed_row[n])
+                    self.assertCountEqual(row[n], parsed_row[n])
                 else:
                     self.assertEqual(e, parsed_row[n])
         self.assertEqual({}, parsed_response[2])

@@ -1,8 +1,1044 @@
 ## Under development
 
 
+### Notes
+
+- A virtualenv update is required.
+
+- All \*.pyc files in the folders `django/applications/catmaid/migrations/`,
+  `django/applications/performancetests/migrations/` and
+  `django/applications/pgcompat/migrations/` need to be deleted.
+
+- Python 3.7 is now supported.
+
+- Heads-up: The next CATMAID version will require Postgres 11 and Python 3.6.
+
+- Should migration 0057 fail due a permission error, the Postgres extension
+  "pg_trgm" has to be installed manually into the CATMAID database using a
+  Postgres superuser: CREATE EXTENSION pg_trgm;
+
+- CATMAID's version information changes back to a plain `git describe` format.
+  This results overall in a simpler setup and makes live easier for some
+  third-party front-ends, because the commit counter is included again. The
+  version display is now the same `git describe` format for both regular setups
+  and Docker containers.
+
+- Tile loading is clamped to (0,0) again, i.e. there are no negative tile
+  coordinates anymore by default. If you need them, set the respective stack's
+  `metadata` field to `{"clamp": false}`.
+
+- To write to CATMAID through its API using an API token, users need to have
+  now dedicated "API write" permission, called "Can annotate project using
+  API token" in the admin UI. To restore the previous behavior (regular annotate
+  permission allows API write access) the settings.py variable
+  `REQUIRE_EXTRA_TOKEN_PERMISSIONS` can be set to `False`. This is done as a
+  safety measure to prevent accidental changes through automation.
+
+- If R based NBLAST is used, make sure to execute to update all dependencies:
+  `manage.py catmaid_setup_nblast_environment`.
+
+- The main documentation on catmaid.org has now a place for widget specific
+  documentation as well. Only a few widgets have been updated yet, but more will
+  follow.
+
+
+### Features and enhancements
+
+Tracing tool:
+
+- Add a new Tracing Tool icon button to compute the distance between two nodes
+  on a skeleton. Respects virtual nodes.
+
+- The globally nearest node can now be selected and brought into view using
+  Alt + G, as opposed to selecting the nearest node in the current section
+  using the G key without modifier.
+
+- Using the H shortcut now without an active skeleton, the most recently edited
+  node of the current user (Alt: anyone) in the last active skeleton will be
+  selected. Using Shift will look in all skeletons.
+
+- Using Shift + Alt + Click with a connector selected, will will now create a
+  presynaptic node. This is consistent with the already existing Shift + Alt +
+  Click behavior with a treenode selected, which creates a presynaptic
+  connector.
+
+Measurement table:
+
+- Node filters are now supported. Like in other widgets, the respective panel
+  can be opened through the funnel icon in the widget title bar. Measurements
+  are displayed for all independent fragments of a skeleton after a set of node
+  filter rules has been applied.
+
+- With the help of the "Sum fragments" toggle all fragments that result from a
+  node filter application can be aggregated into one row by summing individual
+  values.
+
+Remote CATMAID instances
+
+- Some tools in CATMAID gained support to communicate with other CATMAID
+  instances, e.g. the Landmark Widget (see below). To enable this functionality,
+  remote CATMAID instances can now be added to the user settings.
+
+- The Settings Widget contains now a section labeled "Other CATMAID instances".
+  It allows to manage a list of other CATMAID servers based on their URL, an API
+  key and optional HTTP authentication. This information is stored under an
+  alias.
+
+Landmarks:
+
+- Clicking on the name of a landmark group in the Landmarks tab will now open
+  the group member edit dialog that was previously accessible by clicking any
+  landmark name. Clicking a landmark name will now show a new dialog, which
+  allows to specify of which landmark groups the clicked landmark is a member
+  of.
+
+- The color of each active display transformation can be established separately
+  in the respective table row. Color changes are now also visible in the 3D
+  Viewer.
+
+- It is now possible to load skeletons and landmarks from other CATMAID
+  instances. Point matches are done on the basis of matching landmark names. To
+  enable the UI for this, check the "Source other projects" checkbox in the
+  Display tab.
+
+- With the "other projects" UI enabled and a remote CATMAID instance configured
+  in the Setting Widget (see above), it is now possible to select a remote
+  CATMAID instance from the "Source remote" dropdown menu. Alternatively, the
+  local instance can be selected if another project from the same instance
+  should be used.
+
+- Next the source project in the selected instance needs to be specified. This
+  list is updated when a different remote instance is selected.
+
+- Skeletons from a remote instance are collected through annotations. The
+  respective annotation has to be entered in the "Source skeleton annotation".
+  With the help of the "Preview" button it is possible to load the matching
+  skeletons from their remote CATMAID to inspect if the correct ones are
+  selected.
+
+- As a last step for the remote data configuration, the source landmark group
+  has to be defined. This list is updated if the source project changes.
+  Landmarks from this group are mapped to the selected target group. The
+  matching is done by name, i.e. no landmarks can have the same names in a
+  group.
+
+- Adding such a transformation adds it to the list at the bottom of the widget,
+  just like with regular transformations and they can be used in the same way.
+  The can be shown in 3D Viewers, superimposed on the Tracing Layer and used in
+  NBLAST queries from the Neuron Similarity Widget (see below).
+
+- The new checkbox 'Multiple mappings' displays additional user interface
+  elements to add multiple source and target landmark group mappings for a
+  single display transformation. Point matches are created independently for
+  each pair and only merged for finding the final transformation.
+
+Neuron Similarity:
+
+- The computation of the default "mean" normalized similarity scores is now
+  considerably faster.
+
+- The new "Top N" option allows to store only the Top N best matches in the result
+  set. For "mean" normalization, it will also only compute the mean score for
+  the top N forward hits (mean is the average between forward and backward
+  score). A value of zero disables this cutoff (default). This cutoff can be
+  used speed up computation for very large sets of neurons or large point
+  clouds.
+
+- The new "Reverse" option allows to rank similar objects by there reverse
+  score. That means that the stored score for a particular object pair is target
+  versus query rather than query versus target. NBLAST ues the query neuron as
+  reference, and thereforoe the reverse option can make a difference as long as
+  no "mean" scoring is used.
+
+- It is now possible to use display transformations defined in the Landmark
+  Widget that reference another CATMAID server as their data source. They can be
+  used both as source and target for NBLAST comparisons. This makes it
+  essentially possible to compare skeletons from another CATMAID project,
+  possibly on another CATMAID server, to local skeletons using NBLAST.
+
+- Similarity matrices can now include transformed skeletons in their set of
+  similar objects. To do so, create a Display Transformation in the Landmark
+  Widget that represents the wanted transformation and the select it from the
+  "Sim. transformed skeletons" drop down in the Configurations tab of the Neuron
+  Similarity Widget when creating a similarity matrix.
+
+- Similarity matrices can now be created with more control over which skeletons
+  are looked at as similar. The drop down menu "Similarity mode" allows to
+  select different groupings of the input skeletons (and transformed skeletons).
+  It is for instance possible to group a neuron and its contralateral partner
+  that has been transformed to the side of the first neuron as similar. A
+  confirmation dialog presents the computed grouping before actually creating a
+  similarity matrix.
+
+Graph widget:
+
+- GraphML files can now be imported, positions and colors are respected. This is
+  useful if layouting is done in e.g. Gephi and coloring should be done in
+  CATMAID. The help page explains a possible workflow for this.
+
+- The button "Group equally colored" in the "Main" tab will group all skeletons
+  with the same color into a single group. The user is asked for group names for
+  each color.
+
+3D viewer:
+
+- A new synapse coloring mode has been added: polyadicity. The number of partner
+  nodes for each connector is color coded (for synaptic connectors, this is the
+  number of postsynapses). The colors and ranges can be configured through the
+  "Polyadicity colors" button in the "Shading parameters" tab. This is basically
+  a configurable version of an absolute "N with partner" coloring.
+
+- Branches with leaf nodes tagged "not a branch" can now be collapsed using the
+  'Collapse "not a branch"' checkbox in the Skeleton Filters tab.
+
+- History animations can now be exported in full length without requiring to
+  guess the number of frames for the export. The animation export dialog will
+  show an additional checkbox ("Complete history") if a history animation should
+  be exported.  If complete history is enabled, CATMAID will export the complete
+  history of the exported skeletons.
+
+- Animations can now be exported as stream directly to a file, which allows for
+  much larger exports (32GB maximum at the moment).
+
+- Fractional rotations are now allowed in the animation export.
+
+- The default time per rotatio in the animation export is set to 15 seconds now,
+  slowing down the default by a factor of 3, which makes it easier to look at.
+
+- Stack Z slices can now be animated. Configurable are the change frequency and
+  the change step in terms of sections. This is available for animation exports
+  as well.
+
+- Stack Z slices can now be thresholded to replace a background color with
+  another color. If enabled and the sum of all channels is in a configurable
+  range [a,b] it will be replaced with another color.
+
+- The rotation time for animations can now specified in seconds rather than
+  angular distance.
+
+Skeleton history widget:
+
+- A basic view of the change of a set of skeleton IDs over time based on all
+  nodes that are part of a given skeleton ID or that have been in the past.
+
+- Skeleton history can also be used with past skeleton IDs to see into what
+  skeleton they changed (if any).
+
+- All past and present treenodes with a passed in skeleton ID are tracked
+  through the complete history and their path of skeleton ID changes is
+  recorded along with the number of treenodes following a given skeleton path.
+
+- The widget shows a graph from origin skeletons to the final skeleton IDs in
+  every available path, summing the treenode counts for each contributing path.
+
+- Existing skeletons are colored in yellow, past skeletons are colored in cyan.
+  Selected skeletons are colored green.
+
+- Ctrl+Click on skeleton will select it and go to the closest location in it.
+  Shift+Click allows selecting multiple skeletons. All selected skeletons are
+  available through the Skeleton Source interface.
+
+Node and skeleton filters:
+
+- Filter rules support now an "invert" option during creation, which allows to
+  create filters that include everything but whatever is matched by a particular
+  filter strategy. This can be useful e.g. during neuron review to only look at
+  segments that have been created by people other than oneself or connectivity
+  everywhere excluding a particular compartment.
+
+System check widget:
+
+- A subset of important database statistics are now displayed if a user has the
+  "can_administer" permission in a project. These statistics include e.g. cache
+  hit ratio, temporary files, requested checkpoints and replication lag. For
+  most of them a rule of thumb suggestion on how a value should behave is
+  provided as well.
+
+Administration:
+
+- A grid based node query cache can now be used to speed up tracing data
+  retrieval by precomputing intersection results. This can be useful for larger
+  field of views in big data set. It supports multiple levels of detail per grid
+  cell and can therefore provide a somewhat uniform sampling when limiting the
+  number of displayed nodes. The sorting of this LOD configuration can be
+  controlled so that e.g. only the top N largest skeletons will be shown per
+  cell with growing LOD. The documentation has more details. This cache can be
+  kept up updated using two extra worker processes that listen to database
+  changes, implemented as management commands `catmaid_spatial_update_worker`
+  and `catmaid_cache_update_worker`.
+
+- The database can now emit notifications on tracing data changes using the
+  "catmaid.spatial-update" channel and when grid cache cells get marked dirty
+  on the "catmaid.dirty-cacche" channel. These can be subscribed to using
+  Postgres' LISTEN command. To enable emitting these events and let cache update
+  workers work, set `SPATIAL_UPDATE_NOTIFICATIONS = True` in `settings.py`. This
+  is disabled by default, because sending events for spatial cache updates can
+  add slightly more time to spatial queries, which will mainly be relevant for
+  importing and merging large skeleotons.
+
+- Projects can now be deleted along with the data that reference them (e.g.
+  treenodes, ontologies, volumes). To do so select the projects to delete in the
+  admin project list and select "Delete selected" from action drop down.
+
+- Users can now be set to an inactive state after a specified amount of time.
+  This time is configured for a user group and it applies to users if they are
+  members of such a group. A message can optionally be displayed as well as
+  users to contact that could potentially help. This is configurable as "Group
+  inactivity period" in the admin view. Users to contact for support, can be
+  either configured there or from individual user views.
+
+CLI Exporter:
+
+- If both required annotations and exclusion annotations are provided, the
+  importer will now only exclude a skeleton if it is not also annotated with a
+  sub-annotation of the required annotations set. This behavior can be disabled
+  and exclusion can be enforced when a skeleton is annotated with the exclusion
+  annotation or one of its sub-annotations. To do so, use the new
+  "--exclusion-is-final" switch.
+
+- Volumes can now be exported by using the `--volumes` switch. By default all
+  volumes of the exported project will be included. This can be further
+  constrained by using `--volume-annotation <annotation-name>` arguments.
+
+- The way she exported objects are specified through the command line interface
+  changed. Instead of writing e.g. `--notreenodes` to not import treenodes from
+  a source, `--treenodes false` has to be used now. This is the case for
+  treenodes, connectors, tags and annotations. The defaults (when the argument
+  is not provided) stay the same. To explicitly disable the export of a type
+  `false`, `no`, `f`, `n` and `0` can be provided as argument, e.g. `-treenodes
+  false` or `--users n`. For a positive parameter use `true`, `yes`, `t`, and
+  `1`.
+
+CLI Importer:
+
+- Precompute materializations (edges, connectors) explicitly only for imported
+  data, which improves performance in typical scenarios (import is small
+  compared to existing data). If the old behavior of recomputing everything in
+  the target project should be used in cases where a full data base is imported,
+  the --update-project-materializations switch can be used.
+
+- The way she imported objects are specified through the command line interface
+  changed. Instead of writing e.g. `--notreenodes` to not import treenodes from
+  a source, `--treenodes false` has to be used now. This is the case for
+  treenodes, connectors, tags and annotations. The defaults (when the argument
+  is not provided) stay the same. To explicitly disable the import of a type
+  `false`, `no`, `f`, `n` and `0` can be provided as argument, e.g. `-treenodes
+  false` or `--users n`. For a positive parameter use `true`, `yes`, `t`, and
+  `1`.
+
+- It is now possible to import volumes from CATMAID export files and other
+  projects..
+
+Miscellaneous:
+
+- Tracing layer: a minimum skeleton length can now be specified in the layer
+  options, causing the Tracing Layer to show only nodes of skeletons of at least
+  this cable length (nm).
+
+- Tracing layer: a minimum number of nodes can now be configured to only show
+  skeletons of at certain minimum size (just like the existing minimum cable
+  length constraint). This is configurable through the layer configuration,
+  accessible by clicking the blue/white box in the lower left corner of stack
+  viewers.
+
+- Settings widget: visibility group conditions can now be inverted.
+
+- Confirming a radius selection (Shift + Y) can now also be done using the Enter
+  key.
+
+- Neuron name searches and annotations should be much faster on larger
+  instances.
+
+- Basic support for touch screens (e.g. phones and tablets) is now implemented.
+
+- CATMAID can now export files (e.g. CSVs, videos, etc.) of much larger size
+  than before, if "Save exported files in streaming mode" is enabled in the
+  Settings Widget. To make this work, the browser settings (chrome://settings)
+  "Ask where to save each file before downloading" has to be enabled.
+
+- Context aware help: by clicking the new question mark icon in the upper right
+  corner, a context aware help dialog can be displayed on top of all other
+  CATMAID tools. It provides some general guidance for the intended workflow
+  with individual tools. This can be enable to be displayed by default as part
+  of the Settings Widget. The display of this can also be enabled in a link to a
+  view by appending `&help=true`. This will be added automatically if a help
+  dialog is open during URL creation.
+
+- Connectivity widget: the new "List links' button will open a Connector List
+  with all links of the selected neurons.
+
+- Selection table: the new checkbox "Link visibility" allows to change the
+  behavior of the visibility checkboxes. So far the pre/post/text/meta
+  select-all controls were only affecting the respective visibility options of
+  visible/selected skeletons (default). With unlinked visibility
+  pre/post/text/meta can also be controlled for all neurons, regardless of their
+  visibility. This allows e.g. to only show synapses, but no skeletons.
+
+- General search widget: a more flexible table is now used for display, which
+  allows sorting, filtering and pagination.
+
+- Neuron dendrogram: select currently active node by default when loading the
+  dendrogram for the active skeleton.
+
+- The right end of the status bar contains now a button to toggle the visibility
+  of the top toolbars.
+
+- Updating the copy of client side annotations will only request new data if
+  there are actually new annotations. This makes loading of e.g. the Neuron
+  Search widget faster.
+
+- Boss databases can now be used as tile source type so that image data is
+  loaded from them. More details: https://docs.theboss.io/docs/image.
+
+- Docker: HTTP basic authentication can be configured by using the environment
+  variables HTTP_AUTH_ENABLED, HTTP_AUTH_USER and HTTP_AUTH_PASS in the web
+  container of the `docker-compose.yml` file (an example is given).
+
+- Performance: selecting the closest node in a skeleton should now be faster.
+
+### Bug fixes
+
+- A race condition has been fixed that could in rare cases lead to inconsistent
+  skeleton IDs in a skeleton that is merge into different skeletons by different
+  requests.
+
+- Landmark transformations: fix Moving Least Square transformations for skeleton
+  fragments outside of source group bounding box.
+
+- The Connectivity Graph Plot draws now individual bars in each sub-plot
+  side-by-side and uses the same neuron names as other widgets (from CATMAID's
+  neuron name service).
+
+- Information based on historic information like the history animation in the 3D
+  Viewer and the Neuron History widget includes merge information now correctly.
+  Before, merge nodes were represented twice in a time slice that included the
+  merge.
+
+- The default connector type is now properly persisted as a setting.
+
+- Neuron search: no duplicate entries are shown anymore, which could result e.g.
+  when sub-annotations where allowed.
+
+- Neuron similarity: when showing result skeletons in 3D, skeletons are now
+  appended to the Selection Table of a 3D Viewer, rather than the 3D Viewer
+  directly.
+
+- Connecitivity widget: the auto-connectivity CSV will now use formatted neuron
+  names as column and row headers.
+
+- Graph widget: ungrouping of one-element groups is now allowed.
+
+- Graph widget: merging of grouped skeletons is now handled properly.
+
+- 3D viewer: the depth test for connector partner spheres is now performed
+  correctly and spheres should be rendered in the correct Z order.
+
+- 3D viewer: mouse controls now work correctly in fullscreen mode.
+
+- 3D viewer: the suggested width and height of the animation export are now by
+  default a factor of two. This is required by the WebM encoder. Off values are
+  reduce by one.
+
+- 3D viewer: spatial select works now also without the active node highlighted.
+
+- 3D viewer: no error is shown any more when attempting to move while in radius
+  edit mode.
+
+- 3D viewer: landmark transformed skeletons show now also radius spheres.
+
+- Connector table: the section and tag columns are now part of the CSV export.
+
+- Tracing tool: unneeded node updates are removed from initial tracing layer
+  loading.
+
+- Selection table: don't try to load missing skeletons from JSON file.
+
+- Settings widget: default values for tracing layer skeleton limits can now be
+  configured under Tracing Overlay > Tracing layer skeleton filters.
+
+- The numpad delete key is now recognized as regular delete (if numlock is off).
+
+- SWC neuron import: providing a neuron ID for an import works again and will
+  now also set an optionally provided neuron name. Additionally, it is now
+  required that a user importing skeleton data for an existing neuron ID has
+  the rights to edit the skeleton instance as well as all its treenodes.
+
+- Volume widget: volumes/meshes with annotation can now be removed properly.
+
+- Volume widget: editing a volume by double clicking its table entry works
+  again.
+
+- Neuron dendrogram: correctly reload skeleton if it changes as a result of a
+  split or merge. If a dendrogram node is selected, the respective skeleton will
+  be reloaded after a split, even if its ID changed.
+
+- The Notification Table can be opened again without errors.
+
+- Exporter: connector links are now exported properly if the parameter
+  --original-placeholder-context is used.
+
+- Docker: the docker-compose setup now uses Postgis 2.5 internally and therefore
+  allows upgrades from Postgres versions < 10 with Postgis 2.4.
+
+- Docker: stale Postgres PID files will now be removed during a database upgrade
+  in a docker-compose setup. PID files without actually running database
+  processes prevented some updates before.
+
+- Initial setup: create_configuration.py now also prints the media files
+  directory as part of the webserver example configuration. This is the folder
+  where e.g. some exported files are made available.
+
+
+## 2018.11.09
+
+Contributors: Andrew Champion, Chris Barnes, Tom Kazimiers, William Patton, Eric Trautman
+
+
+# Notes
+
+- Python 3 is now required for the back-end. We recommend the use of Python 3.6.
+
+- CATMAID's version information is now presented in a different form. It follows
+  the pattern `<base-version>[-dev]-<commit>`. The `<base-version>` is baked
+  into the source code on a release. The `-dev` part will only be present if
+  CATMAID's `dev` branch is used for deployment. It won't be present for
+  `master` branch based setups. The `<commit>` part is the 10 digit version of
+  the Git commit ID. This version representation is now also consistent with
+  what is display in Docker images. In the rare event that no commit information
+  can be found, `<commit>` will fallback to "unknown". This version will now
+  also logged during start-up of the back-end.
+
+### Features and enhancements
+
+Connectivity matrix:
+
+- The new checkbox labeled "Fractions" in the "Main" tab makes it now possible
+  to display connector fraction instead of an absolute link number in each cell.
+  The number of connections from one source row to a target column is divided by
+  the number of total posynaptic connections that are made to the target
+  skeleton (column). This makes columns better comparable to each other.
+
+- The auto-connectivity matrix of a large set of skeletons can now be exported
+  as CSV without displaying it using the "Auto-connectivity CSV" button. This
+  makes it possible to export larger connectivity matrices in a usable format.
+
+- The aggregation method for the connectivity count in groups can now be
+  selected. Available are: sum (default), min, max and average.
+
+3D viewer:
+
+- Treenodes that are linked to connector nodes can now be scaled independently
+  from other node handles using the "Link node scaling" option.
+
+- Volume picking is now optional and disabled by default, i.e Shift + Click will
+  go through volumes. To enable volume surface location selection, the
+  "Pickable" checkbox needs to be checked.
+
+- If Reconstruction Sampler domain shading or interval shading is used, a list
+  of valid domains and intervals can now be specified in the "Shadings
+  parameter" tab.
+
+- The X/Y/Z rainbow coloring modes are now also available normalized to each
+  individual skeleton.
+
+- Add custom connector coloring. The pre and post colors can be adjusted in the
+  "Shading parameters" tab.
+
+- The X/Y/Z/ axes can now be displayed in the lower right corner using the
+  "Axes" checkbox in the "View settings" tab.
+
+Reconstruction sampler:
+
+- Improve performance of interval length computation
+
+- Sampled skeletons can now be split after the users confirm this is their
+  intention. The split-off part of the skeleton will not contain any sampler
+  information anymore. Intervals on the split-off part are removed, split-point
+  crossing intervals are shortened and domain end points will be removed and
+  recreated as needed.
+
+- Sampled skeletons can now be merged into. All samplers that reference the
+  merged-in fragment are deleted. If the merged fragment is merged outside
+  of a domain, nothing special is happening---it is a regular merge. If the
+  merge treenode is in a sampler domain, there are currently three options,
+  "Branch", "Domain end" and "New domain": 1. Branch: add the new fragment to the
+  skeleton without changing domain end nodes or intervals. This is only allowed
+  if the merge target is not the start or end of an interval. 2. Domain end: add
+  a new domain end node right where the merged in fragment starts. This keeps
+  the new fragment isolated from the sampled domain. 3. New domain: a new
+  domain is created for the merged in fragment. This also adds the domain end
+  node from (2).
+
+- Domain completion is now shown in percent along with interval coverage of the
+  domain in "Interval" step.
+
+- Merge decisions can now be limited when the 'merge' or 'merge-or-create' leaf
+  handling mode is selected. This means a percentage can be specified which
+  defined below which ratio of extra cable versus interval length the extra
+  cable should be merged into the previous interval (if possible) rather than a
+  new interval is created.
+
+- Ignored lead segments can now be inspected in more detail using the
+  "Uncovered domain parts" button the "Interval" step. This will open a dialog
+  window with a histogram on all ignored leaf segments in the current domain.
+  Clicking on individual bins will open a treenode table containing the
+  respective start nodes of the ignored leaf segments. From this dialog, it is
+  also possible to list all downstream/upstream partners linked to nodes in
+  ignored segments of a domain.
+
+- For samplers using the 'ignore' leaf handing mode, it is now possible to
+  update this to 'short-interval' mode including the generation of missing
+  intervals for existing domains. A visual confirmation dialog is shown. To use
+  this, press the "Set short-interval leaf mode" button in the Domain tab.
+
+- The Synapse tab now also shows all leaf nodes of an interval. This makes it
+  easier to find the places where an interval needs to be continued.
+
+Tracing layer:
+
+- Tracign layer: cycle open end in reverse using Shift + Alt + R.
+
+- Alt + Click now opens consistently the link type context menu, regardless of
+  whether a treenode or connector node is currently selected.
+
+- The layer options now allow to select a user who's tracing data won't be
+  fetched from the server. The main motivation is to hide data imported by a
+  dedicated import user by default and not even fetch it from the server.
+
+- Similar to image data mirrors, it is now possible to configure read-only
+  tracing data mirror servers from which the tracing data will load all data
+  except for the active node, which will be read from the main server. This is
+  particularly useful if connecting to the main server from a remote location.
+  To make this work reliably, it is expected that physical replication is setup
+  on the database level that mirrors the main server constantly. A separate
+  CATMAID instance needs to be setup on the mirror server as well. To configure
+  this, the "Read-only CATMAID mirrors" option in the settings widget can be
+  used together with the "Read-only mirror index".
+
+Neuron similarity:
+
+- The new Neuron Similarity Widget makes it possible to compare neurons to each
+  other, to neurons transformed based on landmarks as well as to arbitrary point
+  clouds. Point clouds can for instance be created from light microscopy data.
+  It creates a similarity ranking based on NBLAST. To open the widget, use Ctrl
+  + Space or the Open Widget button and then search for "Neuron similarity".
+
+- To compare two different objects, NBLAST will compare a query object pairwise
+  with potential target objects. It iterates over each point of the query
+  object, find the closest point in a target object and computes a score based
+  on the distance of these points and their orientation to each other.
+
+- This scoring is done based on a scoring matrix, which needs to be created
+  before any comparisons can be made. Scoring matrices are typically reused and
+  don't need to be recomputed every time. The "Configurations" tab allows to
+  create new similarity matrices and lists existing ones. For a new scoring
+  matrix, probabilities for distance and orientation are computed for both a set
+  of of similar neurons and a representative sample of random neurons. Both are
+  combined into a single matrix in which a value of zero makes a particular a
+  pair of points equally likely to be random or to be a match. Values above zero
+  make a match more likely. Computed similarity matrices can be visualized by
+  clicking the "View" link in the Scoring column of the respective similarity
+  configuration.
+
+- With a similarity matrix computed, similarity queries ca be performed from the
+  "Neuron similarity" tab. In its most basic form, this compares neurons to
+  other neurons. It is also possible to select transformed neurons and point
+  clouds as query type or target type in a search. This however requires
+  additional setup (see below). Query and target skeletons can be selected by
+  selecting a skeleton source for each. A similarity matrix has to be selected
+  as well, but all other options have reasonable defaults. A click on "Compute
+  similarity" queues a new similarity request, which is computed asynchronously.
+  Once the task is complete its table entry will switch its status to
+  "complete".
+
+- Once completed, the similarity query results can be viewed by clicking on
+  "View" in the "Scoring" column. This will open a new result window (or
+  dialog, if selected in the "View" option), which shows the similarity ranking.
+
+- To query with or against transformed skeletons, a landamark based "display
+  transformation" has to be created. To do so, open the Landmark Widget, and
+  create a transformation in its "Display" tab. Transformations created this way
+  are selectable from the Similarity Widget, if "transformed skeletons" is
+  selected for either query or target. Depending on available landmark groups,
+  this could be for instance a skeleton transformation to its contralateral
+  location.
+
+- The Point cloud tab allows to import individual point clouds, along with an
+  optional transformation and representative images. It also provides a list of
+  all point clouds that are visible to the current user. A group visibility
+  option during import allows to restrict visibility of imported point clouds to
+  selected groups (which need to be added from the admin interface).
+
+- The "Point cloud import" tab allows to import many point clouds at the same
+  time, optionally transformed and with linked representative images.
+
+Volumes:
+
+- The general widget controls are now distributed across tabs.
+
+- Annotations can now be used on volumes too. The "Annotate" button in the
+  Volume Manager can be used to annotate all selected volumes.
+
+- The "Add from file" button in the Volume Manager can now be used to import
+  volumes from STL files.
+
+- The "Skeleton innervations" tab allows to search for volumes that intersect
+  with a set of query skeletons. A volume annotation can be specified to look
+  only at volumes having this annotation. Optionally, exact result computation
+  can be disabled to only compute skeleton/bounding-box intersections. This is
+  slightly faster, but leads to false positives.
+
+Docker:
+
+- More CATMAID configuration options are now accessible through Docker
+  environment cariables: CM_DEBUG, CM_FORCE_CONFIG_UPDATE, CM_WRITABLE_PATH,
+  CM_NODE_LIMIT, CM_NODE_PROVIDERS, CM_SUBDIRECTORY, CM_CSRF_TRUSTED_ORIGINS.
+
+- The Git commit from which a Docker image was built is now preserved and
+  included in the CATMAID's version information.
+
+CLI importer:
+
+- If no user information except for IDs is present in the imported data, the
+  importer will by default ask for a username and create new inactive users for
+  those IDs (and update the referenced IDs). Alternatively, the --map-user-ids
+  parameter can be specified, which will make the importer map referenced IDs to
+  existing users. If an existing user with the respective ID is not available,
+  the user is asked for a username and a new user will be created.
+
+- With the help of a few additional progress bars, import progress can be better
+  monitored.
+
+- Database statistics are now automatically recomputed after an import, i.e.
+  ANALYZE is run.
+
+Miscellaneous:
+
+- Each Tracing Layer is now listed as a skeleton source. All skeletons visible
+  in their fields of view are made available to other widgets that way.
+
+- Tracing tool: add icon button to toggle a node coloring mode in which each
+  node is colored according to the length of their respective skeleton. The
+  colors and cable length values when to use it can be set for three colors in
+  the Settings Widget in the "Skeleton length coloring" section.
+
+- The SWC exporter can now optionally mark a node as soma if it either is tagged
+  as "soma", if it has a radius larger than a defined value or if it is the root
+  node. All three conditions can be selected, and they will be applied in the
+  order they are listed above. If selected, a soma tagged node will always take
+  precedence.
+
+- There is small copy-to-clipboard button left to the "URL to the view" link in
+  the upper right corner of the user interface.
+
+- The Ctrl modifier can now be used with - and + to animate zooming.
+
+- New widget: stack info, which displays properties for stacks related to the
+  active project.
+
+- The node cache update management command `catmaid_update_cache_tables` can now
+  update all caches configured in the NODE_PROVIDERS settings variable
+  automatically when the `--from-config` option is provided.
+
+- Admin: a projects/export JSON export of the visible project/stack structure
+  can now be used directly in the Project/stack Importer by selection "JSON
+  representation" as source and pasting the data into the text field.
+
+- Neuron search: regular expressions are now optional for the neuron name.
+  Unless the search string starts with '/', no regular expressions are used,
+  but a regular case insensitive text search.
+
+- Two new connector types are available: "tight junction" and "desmosome". Both
+  can be created through the Alt + Click menu, are reciprocal and two links at
+  one connector are allowed for each type.
+
+- Connectivity widget: all available link types can no be selected to be
+  displayed. Both the gapjunction and attachment checkboxes have been removed in
+  favor of a more generic list select element.
+
+- Tracing layer: the displayed tracing data can now be constrained to show only
+  the N most recently edited skeletons. This settings adds to the skeletons
+  selected by the N largest skeletons filter.
+
+- Many tables should now allow for larger CSV exports.
+
+- Connector table: the exported CSV file has now a more reasonable name and
+  doesn't include all skeleton IDs anymore (this became impractical with larger
+  sets).
+
+- WebGL layers are now preferred by default.
+
+- Project statistics: a top ten of the largest neurons is now displayed.
+
+- Admin: a user import view is now available to import users from other CATMAID
+  instances. It requires superuser permissions on the remote instance.
+
+- DB integrity check management command: volumes are now checked to make sure
+  all faces are triangles. The --tracing [true|false] and --volumes [true|false]
+  command line parameters now allow to explicitly test only some parts of the
+  database. By default all is tested.
+
+
+### Bug fixes
+
+- 3D viewer: loading a single node skeleton with smoothing enabled no longer
+  causes an error.
+
+- 3D viewer: nodes taged with 'uncertain' can be loaded again.
+
+- 3D viewer: various rendering bugs for Reconstruction Sampler domains and
+  intervals have been fixed.
+
+- 3D viewer: stored node scaling settings are now properly restored.
+
+- 3D viewer: TODO tag coloring doesn't override custom label colors anymore.
+
+- 3D viewer: all synaptic site spheres are created and colored again.
+
+- 3D viewer: camera won't flip anymore if it is upside down during animations.
+
+- Tracing overlay: the border of the tracing window is now properly rendered.
+
+- Tracing overlay: child node edition times are now correctly updated if the
+  parent is deleted, which fixes occasional state matching errors.
+
+- Tracing overlay: Shift + Click now works also with attachment connectors,
+  should they be selected as default connector type in the settings.
+
+- Reconstruction sampler: deleting samplers while other samplers on the same
+  neuron refer to the same created boundary nodes no longer causes an error.
+
+- Reconstruction sampler: cable length columns are now sorted numercially.
+
+- Reconstruction sampler: all settings are now correctly reset when a sampler is
+  selected or "New session" is pressed.
+
+- Reconstruction sampler: a few corner cases for binary interval coloring have
+  been fixed. Colors should now alternate in most cases.
+
+- Connectivity matrix: synapse count based ordering works again.
+
+- Connectivity widget: annotations on neurons (used for filtering) are now
+  properly updated when they are changed in another part of CATMAID.
+
+- Graph widget: edge color updates now trigger a redraw operation again.
+
+- CLI importer: the ID sequence for the auth_user table is now properly reset
+  after an import.
+
+- CLI importer: missing treenode-connector links are now imported between
+  connectors and placeholer nodes.
+
+- CLI impoerter: the ID of reused objects is now proplery updated in imported
+  data when --preserve-ids is used.
+
+- CLI importer: skeleton summaries and edge tables aew correctly created again.
+
+- CLI importer: unmapped imported users are now correctly saved.
+
+- The error dialog prints now linen breaks and spaces correctly again, which
+  improves its formatting.
+
+
+## 2018.07.19
+
+Contributors: Albert Cardona, Andrew Champion, Pat Gunn, Tom Kazimiers, Will Patton, Eric Trautman
+
 
 ### Notes
+
+- Both the standalone Docker image and the Docker-compose setup can now be
+  updated after a Postgres version change. This makes it possible again to use
+  CATMAID versions after 2018.02.16 with Docker. The documentation has more
+  information.
+
+- This is the last CATMAID version with support for Python 2.7. Starting from
+  next version, only Python 3 will be supported.
+
+
+### Features and enhancements
+
+Volume widget:
+
+- Add a "List connectors" link to each volume, to show all connectors in a
+  volume bounding box.
+
+- The new "Min skeleton nodes" and "Min skeleton length" options allow to
+  further constrain volume based skeleton selections ("List skeletons").
+
+- The Connector List widget that is shown when clicking on "List connectors",
+  now supports connector filtering. The volume of the link's row is now
+  automatically set as filter in the new Connector List widget. This means
+  connector links in this table are now shown only if they intersect exactly
+  with the volume (and not only with the bounding box like before).
+
+- State saving is now supported.
+
+3D Viewer:
+
+- The line width of skeletons can be adjusted again on platforms other than
+  Linux. This Requires "Volumetric lines" in the "View settings" tab to be
+  enabled (it is by default). Unchecking this option brings back the previous
+  line rendering behavior.
+
+- The new "Focus skeleton" button in the "View" tab will look at the active
+  skeleton's center of mass from the current camea location.
+
+- Volumes can now be smoothed by subdivision. The volume option panel available
+  from the View Settings tab now contains a "Subdivide" checkbox.
+
+- A volume's bounding box can now be displayed using the "BB" checkbox that is
+  available for visible volumes in the volume option panel.
+
+- New coloring option: X/Y/Z rainbow lookup table coloring for active stack
+  dimensions.
+
+- The active node respects now a node radius by default and is scaled to 1.5x
+  its size. This behavior can be disabled using the "Radius adaptive active
+  node" checkbox in the "View settings" tab.
+
+- Catalog export: use global neuron name for sorting and display by default.
+
+- Catalog export: support for multiple neurons per panel has been added
+  (separate from pinned neurons). The export dialog contains now a "Skeletons
+  per panel" input field. Essentially, the displayed skeletons can bow be
+  iterated in batches.
+
+- Catalog export: individual skeleton panels can now also be exported as PNG
+  instead of SVG, which reduces the file size, export time, parsing time. Plus
+  it allows for an exact copy of what is shown in the 3D Viewer.
+
+- Catalog export: in orthographic mode it is now possible to export a scale bar
+  on either none, the first or all exported panels.
+
+- If the estimated size of the tiles to load for a Z plane exceeds 100 MB, users
+  are asked for confirmation.
+
+Connectivity matrix:
+
+- Connector node filters can now be applied using the funnel icon in the widget
+  title bar.
+
+- The new "Groups" tab allows to group rows, columns or both by their displayed
+  name.
+
+- State saving is now supported.
+
+Reconstruction sampler:
+
+- Different leaf handling strategies are now available to be selected for a
+  sampler. The behavior so far (and current default) is to just ignore leaf
+  segments that are shorter than the interval length minus the error margin.
+  Alternatively, it is now possible to merge the leaf segment into the last
+  interval, to create new shorter intervals for the leaf segments or, combining
+  both, it is possible to try to merge it into the last interval and if that's
+  not possible (e.g. on a small twig with no previous interval on the same
+  segment), then create a new short interval. This option is available in the
+  Sampler tab.
+
+- Both the domain table and the interval table now show the cable length of each
+  domain and interval in nanometers, respectively. Additionally, the interval
+  tab also show the aggregated cable length of all completed intervals.
+
+Tracing layer:
+
+- The new option "Update tracing data while panning" allows to configure weather
+  the tracing data on the layer will be updated when the view is panned around.
+
+- A set of new options allows now to configure a "tracing window", which will
+  restrict tracing data loading by allowing it only in view centered rectangle.
+  Width and height can be configured independently. This is useful for remote
+  review and tracing.
+
+- A new option to show only the N largest skeletons in a field of view is now
+  available for the layer settings (and the API).
+
+Miscellaneous:
+
+- The behavior of the Ctrl modifier on section navigation with , and . can now
+  be inverted using the "Animate section change by default" option in the
+  Settings Widget.
+
+- Connectivity widget: annotations can now be used for additional filtering per
+  partner table.
+
+- Split/merge dialog: the node count of the individual parts is now shown when
+  hovering over their cable length information.
+
+- Review widget: the user who created the last node of each segment is now
+  displayed in the review table. This allows to focus review on segments not
+  created by oneself.
+
+- A skeleton cable length limit can be set so that a warning is displayed if a
+  change to the skeleton morphology results in a cable length larger than the
+  limit. This is available in the Warnings section of the Settings Widget.
+
+- Node filters: if a neuron name is provided for a rule, the rule is now valid
+  for all neurons with neuron names that include the provided name and not only
+  exact matches.
+
+- Neuron name display: neighboring duplicate name components are now removed by
+  the default. This setting can be adjusted from the Annotation sections in the
+  Settings Widget.
+
+- Boolean parameters for API endpoints are no case-insensitive, allowing the use
+  of regular boolean values in requests from Python.
+
+- CLI exporter: the new --excluded-annotation parameter can be used to exclude
+  neurons from the export based on annotations.
+
+- CLI exporter: placeholder nodes are now exported as completely new skeletons
+  that are not linked to their original skeleton, unless it is part of the set
+  of exported skeletons or the --original-placeholder-context flag is provided.
+
+
+### Bug fixes
+
+- Measurements table: column headers in CSV export are now quoted.
+
+- Export management command: the default output filename can be used again.
+
+- Export management command: class instances and links of skeletons and neuronsa
+  are now exported alongside treenodes.
+
+- Neuron name service: missing naming components don't lead to removal of all
+  whitespace between neighbors anymore.
+
+- Initial skeleton coloring of merge dialog when merging from smaller into
+  larger skeletons is fixed.
+
+- 3D viewer: refreshing the active skeleton does not refresh all skeletons
+  anymore.
+
+- 3D viewer: connector restrictions like "show only shared connectors" now
+  respect the pre/post visibility toggles in the Selection Table.
+
+- 3D viewer: the initial text scaling for label text is now correctly set again.
+
+- Reconstruction sampler: during interval creation preview, only intervals from
+  the currently active domain are now shown.
+
+- Graph Widget: when subscribed to other widgets, their skeletons are not
+  removed anymore from the Graph Widget when the other widget is closed.
+
+- Neuron Search: annotation data range can be used again.
+
+- The Strahler number computation no correctly increases the Strahler number
+  when two more children have the local maximum number rather than requiring all
+  children to share the same number.
+
+- Radius editing: using undo (Ctrl + Z) after editing the radius of a node works
+  now without an error message.
+
+
+## 2018.04.15
+
+Contributors: Albert Cardona, Andrew Champion, Chris Barnes, Rob Court, Tom Kazimiers
+
+
+### Notes
+
+- Requires a virtualenv update.
 
 - A new management command "catmaid_find_node_provider_config" is available,
   which can be used to compare different node providers on existing data, which
@@ -19,12 +1055,56 @@
 
 ### Features and enhancements
 
+Layouts:
+
+- A new "Layouts" menu is shown in the top bar when a project is opened. It
+  allows to save the current window layout under a name, it provides an option
+  to close all widgets and will show all available layouts as menu entries.
+
+- Layouts store window arrangement, window sizes, tabs and subscriptions.
+
+- Saved layouts can also be manually configured from the "Custom layouts"
+  setting in the Settings Widget.
+
+- Tabbed windows are now supported in layout specs by using "t([a, b, c])" where
+  a, b, c or any other number of elements can be children of the tabbed window.
+
 Landmarks:
 
 - Support transformation of nodes that cross space between landmark groups and
   even reach into target groups. This allows to e.g. transform skeletons that
   cross the midline. Doing this is enabled by default, but can be disabled
-  throug the "Interpolate between groups" option.
+  through the "Interpolate between groups" option.
+
+- Virtual transformed skeletons are now also shown on a separate layer in all
+  open Stack Viewers. Nodes of those skeletons can currently not selected. To
+  disable the Landmark Layer, uncheck the "Show landmark layers" checkbox in the
+  Display tab's button panel.
+
+- The new "Edit landmark" tab provides a simpler interface to add new landmark
+  locations to landmark groups. If the option "Update existing landmark
+  locations" is selected, new landmark locations will replace existing ones
+  shared between the provided landmark and the selected group. The lower
+  section of this tab allows to edit links between landmark groups, which can
+  be used for rule based display transformations.
+
+- As an alternative to selecting a target landmark group explicitly to create a
+  display transformation, it is now possible to instead select a target relation
+  in the Display tab. Doing so will automatically create all display
+  transformations from the source group to all landmark groups transitively
+  linked to the source group using the selected relation. The reciprocity of
+  relations is respected.
+
+- The new "Create groups" tab provides an option to create landmark groups along
+  with required landmarks from the bounding boxes of two volumes. This allow to
+  quickly create simple landmark group mappings.
+
+- The color and extra scaling for nodes on Landmark Layers can be adjusted from
+  the widget.
+
+- All 3D Viewers are now enabled by default as transformation display target.
+
+- State saving is now supported.
 
 3D Viewer:
 
@@ -33,18 +1113,88 @@ Landmarks:
 
 - PNG and SVG exports offer now a filename input field.
 
+- Loaded volumes are now stored along with their styling in the widget state.
+
+- Landmark groups are now show with landmark name labels. This can be disabled
+  from the landmark menu.
+
+- Text scaling can be adjusted from the View tab.
+
+- The width and height of animation exports are now restricted to even numbers.
+  This is required by the H264 codec we refer to in our documentation.
+
+Graph widget:
+
+- The old "Graph" tab was split into two: "Nodes" and "Edges", each with the
+  corresponding functionality.
+
+- New feature: color edges with the same color as the source node, the target
+  node, or the general color specified in the "Properties" menu (from the "Main"
+  tab). See the "Edges" tab.
+
+- New feature: change the arrow shape to a circle, diamond, tee, etc. The new
+  "Set" button in the "Edges" tab applies the change to selected nodes.
+
+- New feature: the new "Selections" tab can record sets of nodes, stored as a
+  named selection. Then these can be selected or deselected.  The "Select all"
+  button selects all nodes from all created selections.
+
+- Basic state saving is now supported.
+
 Reconstruction Sampler:
 
 - Intervals are now displayed with only two colors by default, it makes
-  distinguishing many intervals easier. The previous multicolor mode can be
-  reactivated from the prview window.
+  distinguishing many intervals easier. The previous multi-color mode can be
+  reactivated from the preview window.
+
+Tracing general:
+
+- The settings widget allows now to configure a "fast split mode" and a "fast
+  merge mode" to allow particular groups of skeletons to be split and  merged
+  without confirmation. Similarly to Visibility Groups, these Fast Split/Merge
+  Groups can be defined in terms of a universal match (all skeletons), a
+  required meta-annotation or a creator ID.  In fast split mode, all annotations
+  from the split skeletons are copied over to the split off part. In fast merge
+  mode, all annotations are taken over from a skeleton merged in without
+  confirmation.
+
+- The `P` shortcut (peek) will now show the closest skeleton to the cursor in
+  all open 3D Viewers. To show the active skeleton use `Shift + P`.
+
+- A move/navigation mode can now be used using the new (third) button in the
+  tracing tool bar. If enabled, no mouse based node actions will be performed
+  anymore. Left mouse button clicks/movements are handled like right mouse
+  button clicks/movements.
+
+- The Split Neuron Dialog has now "select all" checkboxes for annotations.
+
+Statistics widget:
+
+- Statistics widget: The new option "All" in the time unit selection control
+  allow to aggregate user data for the whole time range.
+
+- The number of newly created treenodes is now displayed alongside the cable
+  length in the contribution table.
+
+- Each user can now be included in an aggregate statistics row at the end of the
+  table by checking the checkbox in front of the username.
+
+- Add extra Refresh button to top bar.
+
+Volume widget:
+
+- The new link "List skeletons" in each volume table row allows to open a new
+  Selection Table containing all skeletons the bounding box of the respective
+  volume intersects. Due to large numbers of skeletons in bigger volumes, this
+  is currently mainly useful for smaller volumes.
+
+- When creating box volumes, the new button "Define cube at
+  current location" allows to conveniently create a cube with a configurable
+  edge length at the current location.
 
 Miscellaneous:
 
 - Basic Search: allow search for treenode IDs and connector IDs.
-
-- The `P` shortcut (peek) will now show the closest skeleton to the cursor in
-  all open 3D Viewers. To show the active skeleton use `Shift + P`.
 
 - Project administration: selected projects can now be exported as JSON or YAML
   file using the respective action from the drop-down menu.
@@ -54,11 +1204,6 @@ Miscellaneous:
 
 - Connectivity Widget: partner header indexes can now optionally be replaced
   with the neuron name and rotated by 90 degrees.
-
-- Tracing tool: a move/navigation mode can now be used using the new (third)
-  button in the tracing tool bar. If enabled, no mouse based node actions will
-  be performed anymore. Left mouse button clicks/movements are handled like
-  right mouse button clicks/movements.
 
 - The Keyboard/Mouse Help Widget has now a text filter, which allows to show
   only items containing a particular text.
@@ -71,7 +1216,14 @@ Miscellaneous:
 
 - Selection Table: Skeletons can now be imported from CSV files.
 
+- The status bar shows now both stack space and project space coordinates of the
+  mouse cursor.
+
 - The skeleton projection layer works now with orthogonal views.
+
+- Detailed review colors are now enabled by default. To get the old behavior
+  back, adjust your settings (admins can do this for the whole project or
+  server).
 
 - Stacks can now be created whose planar axes have anisotropic resolution.
   The stack viewer will display these stacks correctly by scaling tiles
@@ -80,14 +1232,16 @@ Miscellaneous:
 
 - Added H2N5 tile source type.
 
-- Some APIs are much faster now: 1. Obtaining review info for skeletons with
-  /{project_id}/skeletons/review-status, 2. API and connectivity information
-  through /{project_id}/skeletons/connectivity, 3. Listing skeletons with a
-  minimum node count with /{project_ids}/skeletons/ 4. Getting skeleton node
-  count with /{project_id}/skeleton/{skeleton_id}/node_count. In consequence the
-  following widgets became faster too: Connecticity Widget, Selecting skeleton
-  counts in the Statistics Widget, Review count based coloring (e.g. in Graph
-  Widget). Opening the Merge Dialog is also faster due to this change.
+- Due to the new skeleton summary tables, some APIs are much faster now:
+  1. Obtaining review info skeletons with /{project_id}/skeletons/review-status,
+  2. API and connectivity information through /{project_id}/skeletons/connectivity,
+  3. Listing skeletons with a minimum node count with /{project_ids}/skeletons/
+  4. Getting skeleton node count with /{project_id}/skeleton/{skeleton_id}/node_count.
+
+  In consequence the following widgets became faster too: Connectivity Widget,
+  Selecting skeleton counts in the Statistics Widget, Review count based
+  coloring (e.g. in Graph Widget). Opening the Merge Dialog is also faster due
+  to this change.
 
 
 ### Bug fixes
@@ -96,8 +1250,24 @@ Miscellaneous:
   were sometimes wrong and showed additional intervals. This is fixed now.
   Actual interval boundaries were not affected and are correct.
 
+- Reconstruction Sampler: Individual intervals are not silently deleted anymore
+  if referenced start or end node is deleted. As consequence interval start and
+  end nodes can't be deleted anymore.
+
 - Measurement table: no error is shown anymore after merging two listed
   skeletons.
+
+- Radio button drop-downs and checkbox drop-downs now hide on a mouse click
+  outside of the control.
+
+- Review: fix node selection error appearing during review of some virtual
+  nodes.
+
+- Tracing layer: when trying to create a second presynaptic node to a connector,
+  a warning is now shown instead of a full error dialog. Also the previously
+  created target treenode isn't created anymore in this case.
+
+- Tracing layer: prevent browser context menu on tracing overlay right click.
 
 
 ## 2018.02.16
@@ -637,6 +1807,9 @@ CATMAID extensions:
   and keep the fork updated in parallel.
 
 - More details can be found in the docs.
+
+- CATMAID-autoproofreader extensions has been added to the list of
+  known extensions.
 
 
 3D viewer:

@@ -15,6 +15,8 @@
     var statisticsData = null;
     // The time interval for the contribution table, default to days
     var timeUnit = "day";
+    // The users that are currently aggregated
+    var aggregatedUsers = new Set();
 
     // Whether import activity should be included in the displayed statistics.
     this.includeImports = false;
@@ -34,11 +36,17 @@
       }
 
       var entry = '', points = 0;
+      if( data.hasOwnProperty('new_cable_length') && data['new_cable_length'] > 0 ) {
+        entry += wrapWithLink(data['new_cable_length'].toLocaleString(), 'created') + ' /';
+        points += data['new_cable_length'];
+      } else {
+        entry += '0 /';
+      }
       if( data.hasOwnProperty('new_treenodes') && data['new_treenodes'] > 0 ) {
         entry += wrapWithLink(data['new_treenodes'].toLocaleString(), 'created') + ' /';
         points += data['new_treenodes'];
       } else {
-        entry += '0 /';
+        entry += ' 0 /';
       }
       if( data.hasOwnProperty('new_connectors') && data['new_connectors'] > 0 ) {
         entry += ' ' + wrapWithLink(data['new_connectors'].toLocaleString(), 'connectors') + ' /';
@@ -70,22 +78,43 @@
         timeinterval = 30;
       } else if ("week" === timeunit) {
         timeinterval = 7;
-      } else {
+      } else if ("day" === timeunit) {
         timeinterval = 1;
+      } else if ("all" === timeunit) {
+        timeinterval = data['days'].length;
+      } else {
+        throw new CATMAID.ValueError("Unknown time unit: " + timeunit);
       }
       // Find interval remainder of timespan in days
       var intervalRemainder = data['days'].length % timeinterval;
 
+      var usernamesToIds = Object.keys(data['stats_table']).reduce(function(o, id) {
+        var u = CATMAID.User.all()[id];
+        o[u ? u.login : id] = id;
+        return o;
+      }, {});
+      var userNames = Object.keys(usernamesToIds).sort();
+      var userIds = userNames.map(function(userName) {
+        return parseInt(usernamesToIds[userName], 10);
+      });
+      var unselectedIds = userIds.filter(function(userId) {
+        return !aggregatedUsers.has(userId);
+      });
+
       // Draw table header, showing only the first day of each interval
       $('#project_stats_history_table').empty();
-      var header = '';
+      var header = '<thead>';
       header += '<tr>';
+      let selectAllChecked = unselectedIds.length === 0 ? 'checked' : '';
+      header += '<th><input type="checkbox" data-role="select-all" ' + selectAllChecked + ' /></th>';
       header += '<th>username</th>';
       for(var i = 0; i < data['days'].length; i=i+timeinterval ) {
         // Add interval start date as column header, add "+ X days" if
         // interval is > 1.
         var text = data['daysformatted'][i];
-        if (timeinterval > 1) {
+        if (timeunit === "all") {
+          text = "All since " + text;
+        } else if (timeinterval > 1) {
           // Show remainder instead of full interval on last column, but only if
           // there is more than one day shown.
           if (i + timeinterval < data['days'].length) {
@@ -96,23 +125,22 @@
         }
         header += '<th>' + text + '</th>';
       }
-      header += '</tr>';
+      header += '</tr></thead>';
       $('#project_stats_history_table').append( header );
 
       // Sort by username
       var odd_row = true;
-      var usernamesToIds = Object.keys(data['stats_table']).reduce(function(o, id) {
-        var u = CATMAID.User.all()[id];
-        o[u ? u.login : id] = id;
-        return o;
-      }, {});
       // Draw table body, add up numbers for each interval
+      let tbody = $('<tbody />');
       var showUserAnalytics = userAnalyticsAccessible(project.id);
-      Object.keys(usernamesToIds).sort().forEach(function(username) {
-        var uid = usernamesToIds[username];
+      let intervals = userNames.map(function(username, i) {
+        var uid = userIds[i];
         var row = '', weekpointcount = 0;
-        row += '<tr class="' + (odd_row ? "odd" : "") + '">';
+        row += '<tr class="' + (odd_row ? "odd" : "") + '" data-user-id="' + uid + '" >';
+        let userIntervals = [];
         if( data['stats_table'].hasOwnProperty( uid ) ) {
+          let selected = aggregatedUsers.has(uid) ? 'checked' : '';
+          row += '<td><input type="checkbox" data-role="user-select" ' + selected + ' /></td>';
           if (showUserAnalytics) {
             row += '<td><a href="#" data-user-id="' + uid + '">' + username + '</a></td>';
           } else {
@@ -121,6 +149,7 @@
           // Print statistics cells, wrt. time interval
           for (var i = 0; i < data['days'].length; i=i+timeinterval) {
             var intervalData = {
+              new_cable_length: 0,
               new_treenodes: 0,
               new_connectors: 0,
               new_reviewed_nodes: 0,
@@ -137,6 +166,7 @@
                 // Add current day's data
                 var datekey = data['days'][i + j];
                 var stats = data['stats_table'][uid][datekey];
+                intervalData.new_cable_length += stats.new_cable_length || 0;
                 intervalData.new_treenodes += stats.new_treenodes || 0;
                 intervalData.new_connectors += stats.new_connectors || 0;
                 intervalData.new_reviewed_nodes += stats.new_reviewed_nodes || 0;
@@ -145,17 +175,83 @@
             var formated = get_formated_entry(intervalData);
             row += '<td>'+ formated['entry'] +'</td>';
             weekpointcount += formated['points'];
+            userIntervals.push(intervalData);
           }
         }
         row += '</tr>';
-        if( weekpointcount === 0 ) {
-          return;
-        } else {
+        if( weekpointcount > 0 ) {
           // Flip odd row marker
           odd_row = !odd_row;
           // Add row
-          $('#project_stats_history_table').append( row );
+          tbody.append( row );
         }
+
+        return [uid, userIntervals];
+      });
+      $('#project_stats_history_table').append(tbody);
+
+      // Add footer for aggregate stats of selected users
+      if (aggregatedUsers.size > 0) {
+        let aggData = new Array(Math.ceil(data['days'].length / timeinterval));
+        for (let i=0; i<intervals.length; ++i) {
+          let userId = intervals[i][0];
+          let intervalData = intervals[i][1];
+          if (!aggregatedUsers.has(userId)) {
+            continue;
+          }
+          for (let j=0; j<intervalData.length; ++j) {
+            let interval = intervalData[j];
+            let currentIntervalAgg = aggData[j];
+            if (currentIntervalAgg === undefined) {
+              currentIntervalAgg = {
+                new_cable_length: 0,
+                new_treenodes: 0,
+                new_connectors: 0,
+                new_reviewes: 0
+              };
+              aggData[j] = currentIntervalAgg;
+            }
+
+            currentIntervalAgg.new_cable_length += interval.new_cable_length;
+            currentIntervalAgg.new_treenodes += interval.new_treenodes;
+            currentIntervalAgg.new_connectors += interval.new_connectors;
+            currentIntervalAgg.new_reviewed_nodes += interval.new_reviewed_nodes;
+          }
+        }
+        let footer = $('<tfoot />');
+        let row = '<tr><th></th><th>Selected users</th>';
+        for (let i=0; i<aggData.length; ++i) {
+          // Print table cell
+          var formated = get_formated_entry(aggData[i]);
+          row += '<td>'+ formated['entry'] +'</td>';
+        }
+
+        row += '</tr>';
+        footer.append(row);
+        $('#project_stats_history_table').append(footer);
+      }
+
+      // Add handler for user aggregation toggles
+      $('#project_stats_history_table').on('change','input[data-role=user-select]', function(e) {
+        let userId = parseInt($(this).closest('tr').get(0).dataset.userId, 10);
+        if (this.checked) {
+          aggregatedUsers.add(userId);
+        } else {
+          aggregatedUsers.delete(userId);
+        }
+        update_user_history(statisticsData, timeUnit);
+      });
+      $('#project_stats_history_table').on('change','input[data-role=select-all]', function(e) {
+        if (this.checked) {
+          for (var i=0; i<userNames.length; ++i) {
+            var uid = parseInt(usernamesToIds[userNames[i]], 10);
+            aggregatedUsers.add(uid);
+          }
+        } else {
+          aggregatedUsers.clear();
+        }
+        $('#project_stats_history_table').find('input[data-role=user-select]').prop('checked', this.checked);
+        update_user_history(statisticsData, timeUnit);
       });
 
       if (showUserAnalytics) {
@@ -458,6 +554,7 @@
     this.refresh_project_statistics = function() {
       this.refresh_history();
       this.refreshNodecount();
+      this.refreshLargestNeurons();
     };
 
     this.refreshNodecount = function() {
@@ -469,6 +566,50 @@
           update_piechart(response, "piechart_treenode_holder");
         })
         .catch(CATMAID.handleError);
+    };
+
+    this.refreshLargestNeurons = function() {
+      let self = this;
+      return CATMAID.fetch(project.id + '/stats/cable-length', 'GET', {
+          'n_skeletons': 10,
+        })
+        .then(function(result) {
+          let models = result.reduce(function(o, si) {
+            o[si[0]] = new CATMAID.SkeletonModel(si[0]);
+            return o;
+          }, {});
+          return CATMAID.NeuronNameService.getInstance().registerAll(self, models)
+            .then(function() {
+              return result;
+            });
+        })
+        .then(function(result) {
+          let target = document.getElementById("project-stats-largest-neurons");
+          if (!target) {
+            CATMAID.warn("Could not find target element");
+            return;
+          }
+          // Clear target container
+          while (target.lastChild) {
+            target.removeChild(target.lastChild);
+          }
+          // Add top ten
+          let NNS = CATMAID.NeuronNameService.getInstance();
+          let ul = target.appendChild(document.createElement('ul'));
+          for (let i=0; i<result.length; ++i) {
+            let li = ul.appendChild(document.createElement('li'));
+            let liKey = li.appendChild(document.createElement('span'));
+            liKey.appendChild(document.createTextNode((i+1) + '.'));
+            let liLink = li.appendChild(document.createElement('a'));
+            liLink.href = '#';
+            liLink.dataset.skeletonId = result[i][0];
+            liLink.dataset.role = 'select-skeleton';
+            liLink.appendChild(document.createTextNode(NNS.getName(result[i][0])));
+            let scoreSpan = li.appendChild(document.createElement('span'));
+            scoreSpan.classList.add('cable-length');
+            scoreSpan.appendChild(document.createTextNode(' (' + Math.round(result[i][1]) + 'nm)'));
+          }
+        });
     };
 
     this.refresh_history = function() {
@@ -527,6 +668,13 @@
       createControls: function(controls) {
         var self = this;
 
+        let refresh = controls.appendChild(document.createElement('input'));
+        refresh.setAttribute('type', 'button');
+        refresh.setAttribute('value', 'Refresh');
+        refresh.onclick = function() {
+          self.refresh_project_statistics();
+        };
+
         // If this user has has can_administer permissions in this project,
         // buttons to access additional tools are addeed.
         if (userAnalyticsAccessible(project.id)) {
@@ -562,12 +710,13 @@
                 '<option value="week">Week</option>' +
                 '<option value="month">Month</option>' +
                 '<option value="year">Year</option>' +
+                '<option value="all">All</option>' +
               '</select>' +
             '</div>' +
           '</p>' +
           '<div class="clear">' +
             '<br />' +
-            'per cell values: new cable length (nm) / completed connector links / reviewed nodes' +
+            'per cell values: new cable length (nm) / new nodes / completed connector links / reviewed nodes' +
             '<table cellpadding="0" cellspacing="0" border="1" class="project-stats"' +
                 'id="project_stats_history_table">' +
             '</table>' +
@@ -577,7 +726,14 @@
           '<div class="buttonpanel" data-role="piechart_treenode_controls"></div>' +
           '<div id="piechart_treenode_holder"></div>' +
           '<br clear="all" />' +
+          '<h3>Largest neurons</h3>' +
+          '<div id="project-stats-largest-neurons"></div>' +
           '</div>';
+
+        $(container).on('click', 'a[data-role=select-skeleton]', function() {
+          let skeletonId = parseInt(this.dataset.skeletonId, 10);
+          CATMAID.TracingTool.goToNearestInNeuronOrSkeleton('skeleton', skeletonId);
+        });
 
         var self = this;
 

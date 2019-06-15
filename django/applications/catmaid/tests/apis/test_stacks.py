@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 
@@ -27,6 +26,10 @@ class StacksApiTests(CatmaidApiTestCase):
                 "y": 1536,
                 "z": 460
             },
+            "comment": '<p>&copy;2009 <a href="http://people.epfl.ch/graham.knott">Graham '
+                'Knott</a>.</p> <p>Public INCF data set available at the <a '
+                'href="http://www.incf.org/about/nodes/switzerland/data">Swiss '
+                'INCF Node</a>.</p>',
             "description": "",
             "metadata": None,
             "num_zoom_levels": -1,
@@ -60,7 +63,8 @@ class StacksApiTests(CatmaidApiTestCase):
                 "x": 0.0,
                 "y": 0.0,
                 "z": 0.0
-            }
+            },
+            "downsample_factors": None,
         }
 
         self.assertEqual(expected_result, parsed_response)

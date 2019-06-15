@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
-from django.http import JsonResponse
+from typing import Union
 
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from guardian.utils import get_anonymous_user
 
 
-def reviewer_whitelist(request, project_id=None):
+def reviewer_whitelist(request:HttpRequest, project_id=None) -> Union[HttpResponse, JsonResponse]: # ignores its second (optional) parameter
     """This is currently only a stub.
     """
     # Ignore anonymous user
@@ -21,5 +21,5 @@ def reviewer_whitelist(request, project_id=None):
     else:
         return JsonResponse({
             'success': 'Updating the review whitelist is not ' +
-                       'supported for FlyTEM stacks at this time'
+                       'supported for DVID stacks at this time'
         })

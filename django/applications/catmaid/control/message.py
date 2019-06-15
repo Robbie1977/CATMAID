@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
+from typing import Optional, Union
 
-from django.http import HttpResponseRedirect, JsonResponse
+from django.http import HttpRequest, HttpResponseRedirect, JsonResponse
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, render
 
@@ -11,10 +11,9 @@ from catmaid.models import Message, ChangeRequest
 from catmaid.consumers import msg_user
 from catmaid.control.common import makeJSON_legacy_list
 
-from six.moves import map as imap
 
 @login_required
-def get_latest_unread_date(request):
+def get_latest_unread_date(request:HttpRequest) -> JsonResponse:
     """ This method creates a response containing the date of the most recent
     message added. It is formatted as epoch time.
     """
@@ -22,7 +21,7 @@ def get_latest_unread_date(request):
         latest_date = int(Message.objects \
             .filter(user=request.user, read=False) \
             .order_by('-time') \
-            .values_list('time', flat=True)[0].strftime('%s'))
+            .values_list('time', flat=True)[0].strftime('%s')) # type: Optional[int]
     except IndexError:
         latest_date = None
 
@@ -30,7 +29,7 @@ def get_latest_unread_date(request):
 
 
 @login_required
-def list_messages(request, project_id=None):
+def list_messages(request:HttpRequest, project_id=None) -> JsonResponse:
     messages = Message.objects.filter(
         user=request.user,
         read=False)\
@@ -45,7 +44,7 @@ def list_messages(request, project_id=None):
             'time': str(message.time)
         }
 
-    messages = list(imap(message_to_dict, messages))
+    messages = list(map(message_to_dict, messages))
 
     # Add a dummy message that includes the count of open notifications.
     # This is used to add the red badge to the notifications icon.
@@ -56,7 +55,7 @@ def list_messages(request, project_id=None):
 
 
 @login_required
-def read_message(request, message_id):
+def read_message(request:HttpRequest, message_id) -> Union[HttpResponseRedirect, JsonResponse]:
         message = get_object_or_404(Message, pk=message_id, user=request.user)
         message.read = True
         message.save()
@@ -68,7 +67,7 @@ def read_message(request, message_id):
                 'success': True
             })
 
-def notify_user(user_id, message_id, message_title):
+def notify_user(user_id, message_id, message_title) -> None:
     """Send a ASGI message to the user, if a channel is available."""
     msg_user(user_id, "new-message", {
         "message_id": message_id,

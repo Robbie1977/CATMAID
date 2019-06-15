@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
-import six
 
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
@@ -10,6 +7,7 @@ from catmaid.control.authentication import requires_user_role, can_edit_or_fail
 from catmaid.models import Point, UserRole
 from catmaid.serializers import PointSerializer
 
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,7 +15,7 @@ from rest_framework.views import APIView
 class PointList(APIView):
 
     @method_decorator(requires_user_role(UserRole.Browse))
-    def get(self, request, project_id):
+    def get(self, request:Request, project_id) -> Response: # XXX: Why is this an object method when everything else is class methods?
         """List points, optionally constrained by various properties.
         ---
         parameters:
@@ -32,7 +30,7 @@ class PointList(APIView):
         return Response(serializer.data)
 
     @method_decorator(requires_user_role(UserRole.Annotate))
-    def put(request, project_id):
+    def put(request:Request, project_id) -> Response:
         """Add a new point. Expect at least the location as parameters.
         ---
         parameters:
@@ -70,7 +68,7 @@ class PointList(APIView):
         location_x = float(request.POST.get('x'))
         location_y = float(request.POST.get('y'))
         location_z = float(request.POST.get('z'))
-        radius = float(request.POST.get('radius'), 0)
+        radius = float(request.POST.get('radius', 0))
         confidence = min(max(int(request.POST.get('confidence'), 0), 0), 5)
 
         point = Point.objects.create(project_id=project_id, user=request.user,
@@ -84,7 +82,7 @@ class PointList(APIView):
 class PointDetail(APIView):
 
     @method_decorator(requires_user_role(UserRole.Browse))
-    def get(request, project_id, point_id):
+    def get(request:Request, project_id, point_id) -> Response:
         """Return details on one particular point.
         ---
         parameters:
@@ -104,7 +102,7 @@ class PointDetail(APIView):
         return Response(serializer.data)
 
     @method_decorator(requires_user_role(UserRole.Annotate))
-    def post(request, project_id, point_id):
+    def post(request:Request, project_id, point_id) -> Response:
         """Update one particular point.
 
         Requires at least one field to change.
@@ -159,7 +157,7 @@ class PointDetail(APIView):
             updated_fields['radius'] = float(request.POST.get('radius'))
         if request.POST.has('confidence'):
             confidence = max(min(int(request.POST.get('confidence')), 5), 0)
-            updated_fields('confidence', confidence)
+            updated_fields['confidence'] = confidence
 
         if not updated_fields:
             raise ValueError('No field to modify provided')
@@ -172,7 +170,7 @@ class PointDetail(APIView):
         return Response(serializer.data)
 
     @method_decorator(requires_user_role(UserRole.Annotate))
-    def delete(request, project_id, point_id):
+    def delete(request:Request, project_id, point_id) -> Response:
         """Delete one particular point.
         ---
         parameters:

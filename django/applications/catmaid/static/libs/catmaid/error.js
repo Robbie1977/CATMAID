@@ -116,4 +116,25 @@
   CATMAID.PreConditionError.prototype = Object.create(CATMAID.Error.prototype);
   CATMAID.PreConditionError.prototype.constructor = CATMAID.PreConditionError;
 
+  /**
+   * An error type to indicate an abstract method is not implemented.
+   */
+  CATMAID.NotImplementedError = class NotImplementedError extends CATMAID.Error {};
+
+  /**
+   * An error type to indicate an invalid user login.
+   */
+  CATMAID.InvalidLoginError = class InvalidLoginError extends CATMAID.Error {};
+
+  /**
+   * An error type to indicate an inactive user account. The optional meta field
+   * contains information on the reason of the inactivation.
+   */
+  CATMAID.InactiveLoginError = class InactiveLoginError extends CATMAID.Error {
+    constructor(message, detail, meta) {
+      super(message, detail);
+      this.meta = meta || {};
+    }
+  };
+
 })(CATMAID);

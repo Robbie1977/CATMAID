@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
 
 import json
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import HttpRequest, JsonResponse
 from catmaid.control.dvid.models import DVIDProjectStacks
 
 
-def projects(request):
+def projects(request:HttpRequest) -> JsonResponse:
     """ Returns a list of project objects that are visible for the requesting
     user and that have at least one stack linked to it.
     """
