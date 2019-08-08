@@ -7,7 +7,7 @@ DB_NAME=${DB_NAME:-catmaid}
 DB_USER=${DB_USER:-catmaid_user}
 DB_PASS=${DB_PASS:-catmaid_password}
 DB_CONNECTIONS=${DB_CONNECTIONS:-50}
-DB_CONF_FILE=${DB_CONF_FILE:-"/etc/postgresql/10/main/postgresql.conf"}
+DB_CONF_FILE=${DB_CONF_FILE:-"/etc/postgresql/11/main/postgresql.conf"}
 DB_FORCE_TUNE=${DB_FORCE_TUNE:-false}
 DB_TUNE=${DB_TUNE:-true}
 DB_FIXTURE=${DB_FIXTURE:-false}
@@ -21,11 +21,13 @@ CM_PORT=${CM_PORT:-8000}
 CM_FORCE_CONFIG_UPDATE=${CM_FORCE_CONFIG_UPDATE:-false}
 CM_WRITEABLE_PATH=${CM_WRITEABLE_PATH:-"'/tmp'"}
 CM_NODE_LIMIT=${CM_NODE_LIMIT:-10000}
-CM_NODE_PROVIDERS=${CM_NODE_PROVIDERS:-"'postgis2d'"}
+CM_NODE_PROVIDERS=${CM_NODE_PROVIDERS:-"['postgis2d']"}
 CM_SUBDIRECTORY=${CM_SUBDIRECTORY:-""}
 CM_CSRF_TRUSTED_ORIGINS=${CM_CSRF_TRUSTED_ORIGINS:-""}
+CM_FORCE_CLIENT_SETTINGS=${CM_FORCE_CLIENT_SETTINGS:-false}
+CM_CLIENT_SETTINGS=${CM_CLIENT_SETTINGS:-'None'}
 TIMEZONE=`readlink /etc/localtime | sed "s/.*\/\(.*\)$/\1/"`
-PG_VERSION='10'
+PG_VERSION='11'
 
 # Check if the first argument begins with a dash. If so, prepend "platform" to
 # the list of arguments.
@@ -108,6 +110,19 @@ init_catmaid () {
   sed -i "/^\(NODE_PROVIDERS = \).*/d" mysite/settings.py
   echo "Setting NODE_PROVIDERS = ${CM_NODE_PROVIDERS}"
   echo "NODE_PROVIDERS = ${CM_NODE_PROVIDERS}" >> mysite/settings.py
+
+  # Set initially client-setting
+  sed -i "/^\(CLIENT_SETTINGS = \).*/d" mysite/settings.py
+  echo "Setting CLIENT_SETTINGS = ${CM_CLIENT_SETTINGS}"
+  echo "CLIENT_SETTINGS = ${CM_CLIENT_SETTINGS}" >> mysite/settings.py
+  sed -i "/^\(FORCE_CLIENT_SETTINGS = \).*/d" mysite/settings.py
+  if [ "$CM_FORCE_CLIENT_SETTINGS" = true ]; then
+    echo "Setting FORCE_CLIENT_SETTINGS = True"
+    echo "FORCE_CLIENT_SETTINGS = True" >> mysite/settings.py
+  else
+    echo "Setting FORCE_CLIENT_SETTINGS = False"
+    echo "FORCE_CLIENT_SETTINGS = False" >> mysite/settings.py
+  fi
 
   # Create database and databsae user if not yet present. This should only
   # happen if the database is not run in a separete container.

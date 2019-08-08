@@ -23,6 +23,7 @@ import re
 import readline
 import sh
 import sys
+import traceback
 
 from datetime import date
 from six.moves import input
@@ -124,16 +125,18 @@ class CatmaidRelease(object):
             header_end = header_start + len(release_title)
             next_section_start = changelog_data.find("#", header_end)
             if -1 == next_section_start:
-                raise ValueError("Couldn't find beginning of nexst section after title")
+                raise ValueError("Couldn't find beginning of next section after title")
             contributor_start = changelog_data.find(self.changelog_contributor_label,
                     header_end, next_section_start)
 
             new_contributor_list = -1 == contributor_start
             if new_contributor_list:
                 log("Getting contributors from Git history since HEAD of master (couldn't find it in CHANGELOG.md)")
-                contributor_list = self.git("--no-pager", "log", "--format='%aN'", "master..").stdout.decode('utf-8')
-                contributor_list = [n.strip("\'") for n in set(contributor_list.strip('\n').split('\n'))]
-                contributor_list = ", ".join(contributor_list)
+                contributor_list_data = self.git("--no-pager", "log", "--format='%aN'", "master..").stdout.decode('utf-8')
+                contributors = [n.strip("\'") for n in set(contributor_list_data.strip('\n').split('\n'))]
+                # For the sake of simplicity, sort contributors by last name
+                contributors.sort(key=lambda x: x.split(' ')[-1])
+                contributor_list = ", ".join(contributors)
             else:
                 contributor_label_end = contributor_start + len(self.changelog_contributor_label)
                 contributor_end = changelog_data.find('\n', contributor_start)
@@ -196,8 +199,13 @@ class CatmaidRelease(object):
         self.update_file("sphinx-doc/source/conf.py", contentfilter)
 
         log("Updating API documentation...", False)
-        update_api_doc = sh.make.bake(_cwd=os.path.join(self.project_root, 'sphinx-doc'))
-        update_api_doc('apidoc')
+        try:
+            update_api_doc = sh.make.bake(_cwd=os.path.join(self.project_root, 'sphinx-doc'))
+            update_api_doc('apidoc')
+        except sh.ErrorReturnCode_2:
+            log('Creating the API documentation returned error code 2 (warning):')
+            traceback.print_exc(file=sys.stdout)
+
         self.git.add(os.path.join(self.project_root, 'sphinx-doc/source/_static/api'))
         log("done")
 

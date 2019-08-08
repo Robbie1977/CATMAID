@@ -170,8 +170,8 @@ jQuery.expr[":"].icontainsnot = jQuery.expr.createPseudo(function(arg) {
   };
 
   THREE.Lut.prototype.addColorMap("greenred",
-    [[0.0, '0x6fff5c'], [0.1, '0x00FFFF'], [0.4, '0x85ADFF'],
-     [0.8, '0xFF99FF'], [1.0, '0xFF4F4F']]);
+    [[0.0, 0x6fff5c], [0.1, 0x00FFFF], [0.4, 0x85ADFF],
+     [0.8, 0xFF99FF], [1.0, 0xFF4F4F]]);
 
 })(CATMAID);
 
@@ -185,5 +185,69 @@ jQuery.expr[":"].icontainsnot = jQuery.expr.createPseudo(function(arg) {
   // GitHub and provide our own copy of these files.
   streamSaver.mitm = CATMAID.tools.urlJoin(window.origin, CATMAID.makeStaticURL('libs/streamsaver/worker/mitm.html'));
   streamSaver.ping = CATMAID.tools.urlJoin(window.origin, CATMAID.makeStaticURL('libs/streamsaver/worker/ping.html'));
+
+})(CATMAID);
+
+
+/**
+ * Pixi.js extensions
+ */
+(function(CATMAID) {
+
+  if (PIXI.VERSION !== "4.8.8") {
+    console.warn(`CATMAID patches Pixi.js to work more robustly on some ` +
+      `platforms. The Pixi.js version in use (${PIXI.VERSION}) needs to ` +
+      `be verified to work with this patch.`);
+  }
+
+  /**
+   * The original version of this WebGL support test, sets the context option
+   * "failIfMajorPerformanceCaveat" to true. This means that no WebGL context
+   * will be provided if the browser decides the existing hardware or driver
+   * might cause problems. The only thing this patch changes from the original
+   * version is to set this parameter to false. Future versions of PIXI.js allow
+   * external configuration of this setting and make this patch obsolete.
+   *
+   * This change is consistent with the behavior of THREE.js, which sets this
+   * option to false as well.
+   *
+   * The original version of this code can be found here (0fce893):
+   *
+   * https://github.com/pixijs/pixi.js/blob/v4.x/src/core/utils/index.js
+   */
+  PIXI.utils.isWebGLSupported = function(failIfMajorPerformanceCaveat = false) {
+    const contextOptions = { stencil: true, failIfMajorPerformanceCaveat: failIfMajorPerformanceCaveat };
+
+    try
+    {
+        if (!window.WebGLRenderingContext)
+        {
+            return false;
+        }
+
+        const canvas = document.createElement('canvas');
+        let gl = canvas.getContext('webgl', contextOptions) || canvas.getContext('experimental-webgl', contextOptions);
+
+        const success = !!(gl && gl.getContextAttributes().stencil);
+
+        if (gl)
+        {
+            const loseContext = gl.getExtension('WEBGL_lose_context');
+
+            if (loseContext)
+            {
+                loseContext.loseContext();
+            }
+        }
+
+        gl = null;
+
+        return success;
+    }
+    catch (e)
+    {
+        return false;
+    }
+  };
 
 })(CATMAID);

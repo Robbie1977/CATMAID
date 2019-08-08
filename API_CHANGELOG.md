@@ -6,6 +6,32 @@ included in this changelog.
 
 ### Additions
 
+- GET `/{project_id}/stats/cable-length`:
+  Accepts now an optional 'name_pattern' argument that allows case insensitive
+  pattern matching in the respective neuron name. If a '/' prefix is used, the
+  pattern is interpreted as a regular expression.
+
+- GET|POST `/{project_id}/skeletons/validity`:
+  Obtain a list of valid or invalid skeletons in a set pf passed in skeleton
+  IDs.
+
+### Modifications
+
+None.
+
+### Deprecations
+
+None.
+
+### Removals
+
+None.
+
+
+## 2019.06.20
+
+### Additions
+
 - `GET /{project_id}/nodes/nearest`:
   Replaces `POST /{project_id}/node/nearest`. The parameters are the same, but
   the API allows now to look globally for the nearest node in the project, if no

@@ -3,6 +3,111 @@
 
 ### Notes
 
+- Python 3.5 is not supported anymore. Use Python 3.6 or 3.7.
+
+- Postgres 11 and PostGIS 2.5 is required. If both needs to be updated, update
+  PostGIS first and run `ALTER EXTENSION postgis UPDATE;` in every database. For
+  docker-compose setups this database update is performed automatically.
+
+
+### Features and enhancements
+
+Node filters:
+
+- Binary split: a new toggle labeled "inclusive" allows to decide whether to
+  include the split not in an upstream sub-arbor (default: true).
+
+CLI importer:
+
+- Performance improvement: only the skeleton summary entries of the imported
+  skeletons are now created.
+
+CLI exporter:
+
+- The new --annotation-annotation option allows to specify a meta-annotation
+  that all exported annotations need to share transitively. If for instance all
+  all top-level annotations that should be exported are annotated with
+  "exportable" and "--annotation-annotation exportable" is used, only
+  annotations from those annotation hierarchies marked as "exportable" will be
+  exported. Without this option, all annotations are exported.
+
+Project statistics:
+
+- Requests to the back-end our now performed in parallel, resulting in faster
+  loading times.
+
+- It is now possible to configure how many largest neurons should be displayed
+  as well as an optional name pattern.
+
+Tracing overlay:
+
+- The remote mirror CATMAID instance configuration is now taken from the central
+  configuration, which can be edited in the "Other CATMAID instances" section in
+  the Settings Widget. The "Read-only mirror index" settings is kept but refers
+  to list elements in the central configuration list.
+
+Miscellaneous:
+
+- Projects can now be kept open if all last stack-viewers are closed. To not
+  automatically close the open project with the last stack-viewer, uncheck the
+  "Project closes with last stack viewer" option in the Settings Widget.
+
+- Neuron similarity detail widget: make CSV export of object IDs and names
+  configurable.
+
+### Bug fixes
+
+
+
+## Maintenance updates
+
+- CLI Exporter: if users should be exported, also export users of volumes.
+
+- CLI Importer: only update treenode edges and skeleton summary if treenodes
+  were actually imported (rather than e.g. only volumes).
+
+- CLI Importer: add --auto-name-unknown-users option, to automatically generate
+  names for users that are not available from an import, but referenced in it
+  (by ID).
+
+- CLI Importer: creating unknown users manually works now as expected.
+
+- SWC skeleton import: if `force = true`, treenodes of a replaced skeleton are
+  now correctly removed on a successful import.
+
+- Node filters: the application of node filters with rules applied in an
+  intersected fashion is fixed now and the filtered result of all skeletons is
+  shown.
+
+- Spatial update notifications: only try to update the database configuration if
+  the database isn't running as a database replica.
+
+- Potential WebGL performance problems are now detected when stacks and stack
+  groups are loaded. If problems are expected by the browser, a warning is
+  shown.
+
+- Synapse plot: fix read-out of settings input fields.
+
+- Connectivity matrix: don't raise an error in "fraction" display mode on a
+  widget refresh (e.g. caused by a neuron name update).
+
+- Connectivity matrix: don't show error when enabling "fractions" display
+  without neurons being loaded.
+
+- Connectivity widget: fix error caused by quickly refreshing the table
+  successively.
+
+- Graph widget: fix error caused by quickly refreshing the graph successively.
+
+- Settings: add CLIENT_SETTINGS and FORCE_CLIENT_SETTINGS options so that
+  an initial instance-wide client configuration can be specified.
+
+## 2019.06.20
+
+Contributors: Chris Barnes, Albert Cardona, Andrew Champion, Stephan Gerhard, Pat Gunn, William Patton, Tom Kazimiers
+
+### Notes
+
 - A virtualenv update is required.
 
 - All \*.pyc files in the folders `django/applications/catmaid/migrations/`,
@@ -11,11 +116,13 @@
 
 - Python 3.7 is now supported.
 
-- Heads-up: The next CATMAID version will require Postgres 11 and Python 3.6.
+- Heads-up: The next CATMAID version will require Postgres 11, PostGIS 2.5 and
+  Python 3.6 or 3.7.
 
 - Should migration 0057 fail due a permission error, the Postgres extension
   "pg_trgm" has to be installed manually into the CATMAID database using a
-  Postgres superuser: CREATE EXTENSION pg_trgm;
+  Postgres superuser:
+  `sudo -u postgres psql -d <catmaid-db> -c 'CREATE EXTENSION pg_trgm;'`
 
 - CATMAID's version information changes back to a plain `git describe` format.
   This results overall in a simpler setup and makes live easier for some
@@ -61,6 +168,92 @@ Tracing tool:
   presynaptic node. This is consistent with the already existing Shift + Alt +
   Click behavior with a treenode selected, which creates a presynaptic
   connector.
+
+Graph widget:
+
+- GraphML files can now be imported, positions and colors are respected. This is
+  useful if layouting is done in e.g. Gephi and coloring should be done in
+  CATMAID. The help page explains a possible workflow for this.
+
+- The button "Group equally colored" in the "Main" tab will group all skeletons
+  with the same color into a single group. The user is asked for group names for
+  each color.
+
+3D viewer:
+
+- A new synapse coloring mode has been added: polyadicity. The number of partner
+  nodes for each connector is color coded (for synaptic connectors, this is the
+  number of postsynapses). The colors and ranges can be configured through the
+  "Polyadicity colors" button in the "Shading parameters" tab. This is basically
+  a configurable version of an absolute "N with partner" coloring.
+
+- Branches with leaf nodes tagged "not a branch" can now be collapsed using the
+  'Collapse "not a branch"' checkbox in the Skeleton Filters tab.
+
+- The visibility of radius information can now be controlled using the "Show
+  radius" checkbox in the "Views settings" tab.
+
+- History animations can now be exported in full length without requiring to
+  guess the number of frames for the export. The animation export dialog will
+  show an additional checkbox ("Complete history") if a history animation should
+  be exported.  If complete history is enabled, CATMAID will export the complete
+  history of the exported skeletons.
+
+- Animations can now be exported as stream directly to a file, which allows for
+  much larger exports (32GB maximum at the moment).
+
+- Fractional rotations are now allowed in the animation export.
+
+- The default time per rotation in the animation export is set to 15 seconds now,
+  slowing down the default by a factor of 3, which makes it easier to look at.
+
+- Stack Z slices can now be animated. Configurable are the change frequency and
+  the change step in terms of sections. This is available for animation exports
+  as well.
+
+- Stack Z slices can now be thresholded to replace a background color with
+  another color. If enabled and the sum of all channels is in a configurable
+  range [a,b] it will be replaced with another color.
+
+- The rotation time for animations can now specified in seconds rather than
+  angular distance.
+
+- The background color is now fully adjustable through the "backgorund" button
+  in the "View settings" tab.
+
+- Basic support for Virtual Reality is now available on Windows platforms using
+  a Mixed Reality / SteamVR.3D setup and Firefox >= v65. To enable, check the
+  VR checkbox in the "View" tab and click the "Enter" button right next to it.
+
+Skeleton history widget:
+
+- A basic view of the change of a set of skeleton IDs over time based on all
+  nodes that are part of a given skeleton ID or that have been in the past.
+
+- Skeleton history can also be used with past skeleton IDs to see into what
+  skeleton they changed (if any).
+
+- All past and present treenodes with a passed in skeleton ID are tracked
+  through the complete history and their path of skeleton ID changes is
+  recorded along with the number of treenodes following a given skeleton path.
+
+- The widget shows a graph from origin skeletons to the final skeleton IDs in
+  every available path, summing the treenode counts for each contributing path.
+
+- Existing skeletons are colored in yellow, past skeletons are colored in cyan.
+  Selected skeletons are colored green.
+
+- Ctrl+Click on skeleton will select it and go to the closest location in it.
+  Shift+Click allows selecting multiple skeletons. All selected skeletons are
+  available through the Skeleton Source interface.
+
+Node and skeleton filters:
+
+- Filter rules support now an "invert" option during creation, which allows to
+  create filters that include everything but whatever is matched by a particular
+  filter strategy. This can be useful e.g. during neuron review to only look at
+  segments that have been created by people other than oneself or connectivity
+  everywhere excluding a particular compartment.
 
 Measurement table:
 
@@ -132,6 +325,11 @@ Landmarks:
   single display transformation. Point matches are created independently for
   each pair and only merged for finding the final transformation.
 
+- Using a transformation is now optional (but enabled by default). To disable
+  landmark transformations, uncheck the "Apply transformation" checkbox. This
+  allows e.g. to display skeletons from remote CATMAID instances without
+  modification.
+
 Neuron Similarity:
 
 - The computation of the default "mean" normalized similarity scores is now
@@ -146,7 +344,7 @@ Neuron Similarity:
 
 - The new "Reverse" option allows to rank similar objects by there reverse
   score. That means that the stored score for a particular object pair is target
-  versus query rather than query versus target. NBLAST ues the query neuron as
+  versus query rather than query versus target. NBLAST uses the query neuron as
   reference, and thereforoe the reverse option can make a difference as long as
   no "mean" scoring is used.
 
@@ -170,81 +368,14 @@ Neuron Similarity:
   confirmation dialog presents the computed grouping before actually creating a
   similarity matrix.
 
-Graph widget:
+- Similarity matrices can now be imported from CSV files, optionally including
+  the distance binning and dot binning as header row and column. As part of the
+  import, the distance binning can be scaled to adjust for differences in
+  datasets. This is available through the "Create from CSV file" button in the
+  Configurations tab.
 
-- GraphML files can now be imported, positions and colors are respected. This is
-  useful if layouting is done in e.g. Gephi and coloring should be done in
-  CATMAID. The help page explains a possible workflow for this.
-
-- The button "Group equally colored" in the "Main" tab will group all skeletons
-  with the same color into a single group. The user is asked for group names for
-  each color.
-
-3D viewer:
-
-- A new synapse coloring mode has been added: polyadicity. The number of partner
-  nodes for each connector is color coded (for synaptic connectors, this is the
-  number of postsynapses). The colors and ranges can be configured through the
-  "Polyadicity colors" button in the "Shading parameters" tab. This is basically
-  a configurable version of an absolute "N with partner" coloring.
-
-- Branches with leaf nodes tagged "not a branch" can now be collapsed using the
-  'Collapse "not a branch"' checkbox in the Skeleton Filters tab.
-
-- History animations can now be exported in full length without requiring to
-  guess the number of frames for the export. The animation export dialog will
-  show an additional checkbox ("Complete history") if a history animation should
-  be exported.  If complete history is enabled, CATMAID will export the complete
-  history of the exported skeletons.
-
-- Animations can now be exported as stream directly to a file, which allows for
-  much larger exports (32GB maximum at the moment).
-
-- Fractional rotations are now allowed in the animation export.
-
-- The default time per rotatio in the animation export is set to 15 seconds now,
-  slowing down the default by a factor of 3, which makes it easier to look at.
-
-- Stack Z slices can now be animated. Configurable are the change frequency and
-  the change step in terms of sections. This is available for animation exports
-  as well.
-
-- Stack Z slices can now be thresholded to replace a background color with
-  another color. If enabled and the sum of all channels is in a configurable
-  range [a,b] it will be replaced with another color.
-
-- The rotation time for animations can now specified in seconds rather than
-  angular distance.
-
-Skeleton history widget:
-
-- A basic view of the change of a set of skeleton IDs over time based on all
-  nodes that are part of a given skeleton ID or that have been in the past.
-
-- Skeleton history can also be used with past skeleton IDs to see into what
-  skeleton they changed (if any).
-
-- All past and present treenodes with a passed in skeleton ID are tracked
-  through the complete history and their path of skeleton ID changes is
-  recorded along with the number of treenodes following a given skeleton path.
-
-- The widget shows a graph from origin skeletons to the final skeleton IDs in
-  every available path, summing the treenode counts for each contributing path.
-
-- Existing skeletons are colored in yellow, past skeletons are colored in cyan.
-  Selected skeletons are colored green.
-
-- Ctrl+Click on skeleton will select it and go to the closest location in it.
-  Shift+Click allows selecting multiple skeletons. All selected skeletons are
-  available through the Skeleton Source interface.
-
-Node and skeleton filters:
-
-- Filter rules support now an "invert" option during creation, which allows to
-  create filters that include everything but whatever is matched by a particular
-  filter strategy. This can be useful e.g. during neuron review to only look at
-  segments that have been created by people other than oneself or connectivity
-  everywhere excluding a particular compartment.
+- Similarity query results can now be used as skeleton source in other widgets,
+  if the target type of the query are skeletons.
 
 System check widget:
 
@@ -253,6 +384,22 @@ System check widget:
   hit ratio, temporary files, requested checkpoints and replication lag. For
   most of them a rule of thumb suggestion on how a value should behave is
   provided as well.
+
+Extension: CATMAID-autoproofreader:
+
+- This extension is written by Will Patton and has to be installed separately,
+  because it requires additional setup steps for segmentation data handling.
+  Details can be found here: https://github.com/pattonw/CATMAID-autoproofreader.
+
+- This tool suggests locations in a skeleton reconstructions where branches
+  might be missing or wrongly connected. Users can step through these
+  suggestions to fix potential problems. After reviewing a node it can be marked
+  as reviewed for future reference.
+
+- In the CATMAID front-end the autoproofreader provides a widget that relies on
+  a compute server to handle the computations involved with automatically
+  proofreading a neuron reconstruction. Proofreading jobs are performed
+  asyncronously and might take a few minutes to complete.
 
 Administration:
 
@@ -325,6 +472,13 @@ CLI Importer:
   `false`, `no`, `f`, `n` and `0` can be provided as argument, e.g. `-treenodes
   false` or `--users n`. For a positive parameter use `true`, `yes`, `t`, and
   `1`.
+
+- Imported usernames can now be mapped to existing usernames and mapped
+  selectively by using one or more parameters of the form
+  --username-mapping="import-username=target-username". The example would map
+  all references to the user import-username in the imported data to the
+  existing user target-username. The mapping is performed even with --map-users
+  off.
 
 - It is now possible to import volumes from CATMAID export files and other
   projects..
@@ -423,8 +577,11 @@ Miscellaneous:
   appended to the Selection Table of a 3D Viewer, rather than the 3D Viewer
   directly.
 
-- Connecitivity widget: the auto-connectivity CSV will now use formatted neuron
+- Connectivity widget: the auto-connectivity CSV will now use formatted neuron
   names as column and row headers.
+
+- Connectivity widget: the 'Export CSV' button will now respect name and
+  annotation filters.
 
 - Graph widget: ungrouping of one-element groups is now allowed.
 

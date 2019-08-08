@@ -1,7 +1,7 @@
 .. _docker:
 
-Trying CATMAID with Docker
-==========================
+Docker
+======
 
 With the help of Docker and Docker-compose it is possible to run CATMAID without
 much manual setup involved. With Docker alone, CATMAID will be available as demo
@@ -51,9 +51,9 @@ containers. The database container stores the database outside of the container
 so it is kept over restarts. To run this setup, first install install
 Docker-compose::
 
-  sudo sh -c "curl -L https://github.com/docker/compose/releases/download/1.15.0/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose"
+  sudo sh -c "curl -L https://github.com/docker/compose/releases/download/1.24.1/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose"
   sudo chmod +x /usr/local/bin/docker-compose
-  sudo sh -c "curl -L https://raw.githubusercontent.com/docker/compose/1.8.0/contrib/completion/bash/docker-compose > /etc/bash_completion.d/docker-compose"
+  sudo sh -c "curl -L https://raw.githubusercontent.com/docker/compose/1.24.1/contrib/completion/bash/docker-compose > /etc/bash_completion.d/docker-compose"
 
 Next clone the ``catmaid-compose`` repo to a convenient location. Note that by
 default the database will be stored in this location, too::
@@ -183,3 +183,25 @@ needs then to be rebuilt and run::
 After a successful upgrade, the ``DB_UPDATE`` variable should be set to
 ``false`` again, to not accidentally upgrade the data files without ensuring a
 back-up has been made.
+
+Notes on shared memory in Docker
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Due to the low default allowed shared memory in Docker containers (64MB), bigger
+instances might run into an error similar to this::
+
+  Traceback (most recent call last):
+  […]
+  psycopg2.OperationalError: could not resize shared memory segment
+  "/PostgreSQL.909036009" to 70019784 bytes: No space left on device
+
+To fix this, the allowed shared memory (which is what Postgres makes heavy use
+of) can be increased. When running ``docker`` directly, add the ``--shm-size=2g``
+option. If ``docker-compose`` is in use, add ``shm_size: '2gb'`` to the build
+context::
+
+  build:
+    context:
+       shm_size: '2gb'
+
+For more available shared memory, increase the example of ``2gb``.

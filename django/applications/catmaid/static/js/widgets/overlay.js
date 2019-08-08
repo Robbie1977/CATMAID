@@ -1137,9 +1137,6 @@ var SkeletonAnnotations = {};
             apply_tracing_window: {
               default: false
             },
-            read_only_mirrors: {
-              default: []
-            },
             read_only_mirror_index: {
               default: -1
             },
@@ -2833,7 +2830,7 @@ var SkeletonAnnotations = {};
           // Ignore invalid entries.
           continue;
         }
-        // Exta treenodes
+        // Extra treenodes
         if (d[0] && d[0].length > 0) {
           Array.prototype.push.apply(jsonNodes, d[0]);
         }
@@ -3802,16 +3799,12 @@ var SkeletonAnnotations = {};
       // If there is a read-only mirror defined, get all nodes from there and
       // do an extra query for the active node from the regular back-end.
       let mirrorIndex = CATMAID.TracingOverlay.Settings.session.read_only_mirror_index;
+      let api;
       if (mirrorIndex > -1) {
-        let mirrorServer = CATMAID.TracingOverlay.Settings.session.read_only_mirrors[mirrorIndex - 1];
-        if (mirrorServer) {
+        api = CATMAID.Client.Settings.session.remote_catmaid_instances[mirrorIndex - 1];
+        if (api) {
           dedicatedActiveSkeletonUpdate = true;
-          url = CATMAID.tools.urlJoin(mirrorServer.url, project.id + '/node/list');
-          if (mirrorServer.auth && mirrorServer.auth.trim().length > 0) {
-            headers = {
-              'X-Authorization': mirrorServer.auth,
-            };
-          }
+          url = CATMAID.tools.urlJoin(api.url, project.id + '/node/list');
         }
       }
 
@@ -4001,6 +3994,7 @@ var SkeletonAnnotations = {};
                 headers: headers,
                 details: true,
                 parallel: extraUpdate,
+                api: api,
               }).then(function(r) {
                 // Parse response
                 let response = parseNodeResponse(r.data, transferFormat);
@@ -4029,8 +4023,6 @@ var SkeletonAnnotations = {};
           // Before updating the internal node representation, update the active
           // node, if this is required.
           if (extraUpdate) {
-            // TODO: To authenticate with the mirror server, an API token needs to
-            // be specified.
             let extraParams = CATMAID.tools.deepCopy(params);
             extraParams['src'] = 'extra_nodes_only';
             extraParams['treenode_ids'] = treenodeIDs;
@@ -4039,7 +4031,7 @@ var SkeletonAnnotations = {};
             // To not query all nodes in the field of view, update the parameter
             // object
             requests.push(CATMAID.fetch({
-                relativeURL: mainUrl,
+                absoluteURL: mainUrl,
                 method: 'GET',
                 data: extraParams,
                 blockUI: false,

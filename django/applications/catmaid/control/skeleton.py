@@ -648,19 +648,19 @@ def neuronnames(request:HttpRequest, project_id=None) -> JsonResponse:
 
 @api_view(['GET', 'POST'])
 @requires_user_role(UserRole.Browse)
-def cable_lengths(request:HttpRequest, project_id=None) -> JsonResponse:
+def cable_lengths(request:HttpRequest, project_id=None) -> HttpResponse:
     """Get the cable length of a set of skeletons.
 
     Returns a mapping from skeleton ID to cable length.
     ---
     parameters:
       - name: project_id
-        description: Project of landmark
+        description: Project to operate in
         type: integer
         paramType: path
         required: true
       - name: skeleton_ids[]
-        description: IDs of the skeletons whose partners to find
+        description: IDs of the skeletons to query cable-length for
         required: true
         type: array
         items:
@@ -679,10 +679,90 @@ def cable_lengths(request:HttpRequest, project_id=None) -> JsonResponse:
     if not skeleton_ids:
         raise ValueError('Need at least one skeleton ID')
 
-    cable_lengths = dict(SkeletonSummary.objects.filter(project_id=project_id,
-            skeleton_id__in=skeleton_ids).values_list('skeleton_id',
-                'cable_length'))
-    return JsonResponse(cable_lengths)
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT COALESCE(json_object_agg(css.skeleton_id, css.cable_length), '{}'::json)::text
+        FROM catmaid_skeleton_summary css
+        JOIN UNNEST(%(query_skeleton_ids)s::bigint[]) query_skeleton(id)
+            ON query_skeleton.id = css.skeleton_id
+        WHERE project_id = %(project_id)s
+    """, {
+        'query_skeleton_ids': skeleton_ids,
+        'project_id': project_id,
+    })
+
+    return HttpResponse(cursor.fetchone()[0], content_type='application/json')
+
+
+@api_view(['GET', 'POST'])
+@requires_user_role(UserRole.Browse)
+def validity(request:HttpRequest, project_id=None) -> HttpResponse:
+    """Find out if passed skeleton IDs are valid (and represent present
+    skeletons).
+
+    Returns all passed in skeletons that are valid.
+    ---
+    parameters:
+      - name: project_id
+        description: Project of landmark
+        type: integer
+        paramType: path
+        required: true
+      - name: skeleton_ids[]
+        description: IDs of the skeletons whose partners to find
+        required: true
+        type: array
+        items:
+          type: integer
+        paramType: form
+      - name: return_invalid
+        description: Whether or not to return invalid skeleton IDs rather than valid ones.
+        required: false
+        type: bool
+        default: false
+    """
+
+    if request.method == 'GET':
+        data = request.GET
+    elif request.method == 'POST':
+        data = request.POST
+    else:
+        raise ValueError("Invalid HTTP method: " + request.method)
+
+    skeleton_ids = get_request_list(data, 'skeleton_ids', map_fn=int)
+    if not skeleton_ids:
+        raise ValueError('Need at least one skeleton ID')
+
+    return_invalid = get_request_bool(data, 'return_invalid', False)
+
+    cursor = connection.cursor()
+
+    if return_invalid:
+        cursor.execute("""
+            SELECT COALESCE(json_agg(query_skeleton.id), '[]'::json)::text
+            FROM UNNEST(%(query_skeleton_ids)s::bigint[]) query_skeleton(id)
+            LEFT JOIN catmaid_skeleton_summary css
+                ON css.skeleton_id = query_skeleton.id
+                AND css.project_id = %(project_id)s
+            WHERE css.skeleton_id IS NULL
+        """, {
+            'query_skeleton_ids': skeleton_ids,
+            'project_id': project_id,
+        })
+    else:
+        cursor.execute("""
+            SELECT COALESCE(json_agg(query_skeleton.id), '[]'::json)::text
+            FROM UNNEST(%(query_skeleton_ids)s::bigint[]) query_skeleton(id)
+            JOIN catmaid_skeleton_summary css
+                ON css.skeleton_id = query_skeleton.id
+            WHERE project_id = %(project_id)s
+        """, {
+            'query_skeleton_ids': skeleton_ids,
+            'project_id': project_id,
+        })
+
+    return HttpResponse(cursor.fetchone()[0], content_type='application/json')
+
 
 @api_view(['GET', 'POST'])
 @requires_user_role(UserRole.Browse)
@@ -2533,13 +2613,15 @@ def _import_skeleton(user, project_id, arborescence, neuron_id=None,
                     can_edit_class_instance_or_fail(user, old_skeleton.id, 'class_instance')
                     # Require users to have edit permission on all treenodes of the
                     # skeleton.
-                    treenode_ids = Treenode.objects.filter(skeleton_id=old_skeleton.id,
-                            project_id=project_id).values_list('id', flat=True)
+                    treenodes = Treenode.objects.filter(skeleton_id=old_skeleton.id,
+                            project_id=project_id)
+                    treenode_ids = treenodes.values_list('id', flat=True)
                     can_edit_all_or_fail(user, treenode_ids, 'treenode')
 
                     # Remove existing skeletons
                     skeleton_link.delete()
                     old_skeleton.delete()
+                    treenodes.delete()
 
                 new_neuron = existing_neuron
             elif auto_id:
@@ -2577,11 +2659,12 @@ def _import_skeleton(user, project_id, arborescence, neuron_id=None,
                 can_edit_class_instance_or_fail(user, skeleton_id, 'skeleton')
                 # Require users to have edit permission on all treenodes of the
                 # skeleton.
-                treenode_ids = Treenode.objects.filter(skeleton_id=skeleton_id,
-                        project_id=project_id).values_list('id', flat=True)
-                can_edit_all_or_fail(user, treenode_ids, 'treenode')
+                treenodes = Treenode.objects.filter(skeleton_id=skeleton_id,
+                        project_id=project_id)
+                treenode_ids = treenodes.values_list('id', flat=True)
                 # Raise an Exception if the user doesn't have permission to
-                # edit the existing skeleton.
+                # edit the existing treenodes.
+                can_edit_all_or_fail(user, treenode_ids, 'treenode')
                 for link in cici:
                     old_neuron = link.class_instance_b
                     can_edit_class_instance_or_fail(user, old_neuron.id, 'class_instance')
@@ -2589,6 +2672,7 @@ def _import_skeleton(user, project_id, arborescence, neuron_id=None,
                     # Remove existing skeletons
                     link.delete()
                     old_neuron.delete()
+                    treenodes.delete()
 
                 new_skeleton = existing_skeleton
             elif auto_id:
@@ -2745,15 +2829,16 @@ def annotation_list(request:HttpRequest, project_id=None) -> JsonResponse:
     annotations = bool(int(request.POST.get("annotations", 0)))
     metaannotations = bool(int(request.POST.get("metaannotations", 0)))
     neuronnames = bool(int(request.POST.get("neuronnames", 0)))
+    ignore_invalid = get_request_bool(request.POST, "ignore_invalid", False)
 
     response = get_annotation_info(project_id, skeleton_ids, annotations,
-                                   metaannotations, neuronnames)
+                                   metaannotations, neuronnames, ignore_invalid)
 
     return JsonResponse(response)
 
 
 def get_annotation_info(project_id, skeleton_ids, annotations, metaannotations,
-                        neuronnames) -> Dict[str, Any]:
+                        neuronnames, ignore_invalid=False) -> Dict[str, Any]:
     if not skeleton_ids:
         raise ValueError("No skeleton IDs provided")
 
@@ -3355,7 +3440,7 @@ def skeletons_in_bounding_box(request:HttpRequest, project_id) -> JsonResponse:
     elif request.method == 'POST':
         data = request.POST
     else:
-        raise ValueError("Unsupported HTTP method: " + data.method)
+        raise ValueError("Unsupported HTTP method: " + request.method)
 
     params = {
         'project_id': project_id,

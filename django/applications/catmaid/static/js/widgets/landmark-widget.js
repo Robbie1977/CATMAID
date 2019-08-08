@@ -87,6 +87,9 @@
     // The default landmark group relation.
     this.editLinkRelation = 'adjacent_to';
 
+    // Whether to show transformation options (and apply transformations) in the
+    // first place.
+    this.applyTransformation = true;
     // Whether to allow use of existing landmarks
     this.groupsReuseExistingLandmarks = false;
     // Whether to allow the creation of Display Transformations from other
@@ -853,8 +856,7 @@
       let transformation = this.displayTransformations[i];
       let providerAdded = CATMAID.Landmarks.addProvidersToTransformation(
           transformation, this.landmarkGroupIndex, this.landmarkIndex, i,
-          this.sourceLandmarkGroupIndex, this.sourceLandmarkIndex, true,
-          this.useReversePointMatches);
+          this.sourceLandmarkGroupIndex, this.sourceLandmarkIndex, true);
       if (providerAdded) {
         for (let j=0; j<target3dViewers.length; ++j) {
           let widget = target3dViewers[j];
@@ -2744,6 +2746,15 @@
           },
           {
             type: 'checkbox',
+            value: target.applyTransformation,
+            label: 'Apply transformation',
+            onclick: function() {
+              target.applyTransformation = this.checked;
+              target.update();
+            },
+          },
+          {
+            type: 'checkbox',
             value: target.showOtherProjectOptions,
             label: 'Source other projects',
             onclick: function() {
@@ -3141,6 +3152,9 @@
           sourceGroupWrapper.appendChild(sourceGroupSetting);
         };
 
+        // Target select
+        let targetGroupWrapper = document.createElement('span');
+
         // This is populated depending on the configuration mode.
         var updateMatchingGroupList = null;
 
@@ -3169,7 +3183,8 @@
               targetSelect.onchange = function(e) {
                 toGroup = e.target.value;
               };
-              $(newDTForm).append(targetGroup);
+              $(targetGroupWrapper).append(targetGroup);
+              $(newDTForm).append(targetGroupWrapper);
 
               // Optionally, multiple mappings can be defined.
               if (widget.showMultiMappingOptions) {
@@ -3494,19 +3509,26 @@
                 }[transformModelSelect.value];
               };
 
+              // Visibility of transformation controls
+              let transformationDisplay = widget.applyTransformation ? 'block' : 'none';
+              sourceGroupWrapper.style.display = transformationDisplay;
+              targetGroupWrapper.style.display = transformationDisplay;
+              targetRelationWrapper.style.display = transformationDisplay;
+              transformModelSelectLabel[0].style.display = transformationDisplay;
+
               // Add button
               let buttonContainer = document.createElement('div');
               buttonContainer.classList.add('clear');
               let addButton = document.createElement('button');
               addButton.appendChild(document.createTextNode('Add transformation'));
               addButton.onclick = function() {
-                if (!fromGroup && activeMappings.length === 0) {
+                if (widget.applyTransformation && !fromGroup && activeMappings.length === 0) {
                   CATMAID.error("Need source landmark group");
                   return;
                 }
 
                 let mappings;
-                if (!displayTargetRelation) {
+                if (widget.applyTransformation && !displayTargetRelation) {
                   if (!toGroup && activeMappings.length === 0) {
                     CATMAID.error("Need target landmark group");
                     return;
@@ -3550,7 +3572,7 @@
                     })
                     .catch(CATMAID.handleError);
                 } else {
-                  if (mappings.length === 0) {
+                  if (widget.applyTransformation && mappings.length === 0) {
                     CATMAID.error("Need at leat one source/target selection.");
                     return;
                   }
@@ -3855,7 +3877,7 @@
         };
       },
       setState: function(widget, state) {
-        CATMAID.tools.copyIfDefined(state, widget, 'importReuseExistingLandmarks');
+        CATMAID.tools.copyIfDefined(state, widget, 'importAllowNonEmptyGroups');
         CATMAID.tools.copyIfDefined(state, widget, 'importCreateNonExistingGroups');
         CATMAID.tools.copyIfDefined(state, widget, 'importReuseExistingLandmarks');
         CATMAID.tools.copyIfDefined(state, widget, 'useReversePointMatches');

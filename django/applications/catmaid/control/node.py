@@ -1389,9 +1389,19 @@ CACHE_NODE_PROVIDER_DATA_TYPES = {
 }
 
 
+def get_node_provider_configs():
+    """Get a list of specified node provider configurationss."""
+    configs = settings.NODE_PROVIDERS
+    if type(configs) == str:
+        configs = [configs]
+    return configs
+
+
 def get_configured_node_providers(provider_entries, connection=None,
         enabled_only=False) -> List:
     node_providers = []
+    if type(provider_entries) == str:
+        provider_entries = [provider_entries]
     for entry in provider_entries:
         options = {} # type: Dict
         # An entry is allowed to be a two-tuple (name, options) to provide
@@ -1416,7 +1426,7 @@ def get_configured_node_providers(provider_entries, connection=None,
 
 def update_node_query_cache(node_providers=None, log=print, force=False) -> None:
     if not node_providers:
-        node_providers = settings.NODE_PROVIDERS
+        node_providers = get_node_provider_configs()
 
     for np in node_providers:
         log("Checking node provder {}".format(np))
@@ -1980,7 +1990,7 @@ def update_grid_cell(project_id, grid_id, w_i, h_i, d_i, cell_width,
 
 
 def prepare_db_statements(connection) -> None:
-    node_providers = get_configured_node_providers(settings.NODE_PROVIDERS, connection)
+    node_providers = get_configured_node_providers(get_node_provider_configs(), connection)
     for node_provider in node_providers:
         node_provider.prepare_db_statements(connection)
 
@@ -2190,7 +2200,7 @@ def node_list_tuples(request:HttpRequest, project_id=None, provider=None) -> Htt
     if override_provider:
         node_providers = get_configured_node_providers([override_provider])
     else:
-        node_providers = get_configured_node_providers(settings.NODE_PROVIDERS)
+        node_providers = get_configured_node_providers(get_node_provider_configs())
 
     return compile_node_list_result(project_id, node_providers, params,
         treenode_ids, connector_ids, include_labels, target_format,
@@ -2721,28 +2731,43 @@ def node_nearest(request:HttpRequest, project_id=None) -> JsonResponse:
     cursor = connection.cursor()
 
     skeleton_filter = None
+    # Separate access methods are needed to convice the Postgres planner to not
+    # to distance tests to all treenodes if only a skeleton is looked at.
     if skeleton_id:
         skeleton_filter = """
-            JOIN (
-                SELECT id
-                FROM treenode t
-                WHERE skeleton_id = %(skeleton_id)s
-            ) skeleton_node(id)
-            ON skeleton_node.id = te.id
+            WITH skeleton_edge AS (
+                SELECT te.id, te.edge
+                FROM treenode_edge te
+
+                JOIN (
+                    SELECT id
+                    FROM treenode t
+                    WHERE skeleton_id = %(skeleton_id)s
+                ) skeleton_node(id)
+                ON skeleton_node.id = te.id
+
+                WHERE project_id = %(project_id)s
+            )
+            SELECT id, edge
+            FROM skeleton_edge
+        """
+    else:
+        skeleton_filter = """
+            SELECT id, edge
+            FROM treenode_edge
+            WHERE project_id = %(project_id)s
         """
 
     # Find the globally closest treenode among the 100 closest edges. This
     # is done that way so that an index can be used. We just assume that the
     # closest node is among the closest edge bounding box centroids (<<->>
-    # operator).
+    # operator). Use a CTE to enforce better estimates and guarantee a low
+    # number of distance tests.
     cursor.execute("""
         SELECT treenode.id, skeleton_id, location_x, location_y, location_z
         FROM treenode
         JOIN (
-            SELECT te.id, te.edge
-            FROM treenode_edge te
             {skeleton_filter}
-            WHERE project_id = %(project_id)s
             ORDER BY edge <<->> ST_MakePoint(%(x)s,%(y)s,%(z)s)
             LIMIT 100
         ) closest_node(id, edge)

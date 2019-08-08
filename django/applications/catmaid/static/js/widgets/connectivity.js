@@ -670,7 +670,8 @@
       .catch(CATMAID.handleError);
     })
     .catch(function(error) {
-      if (error !== 'REPLACED') {
+      // Ignore replaced requests.
+      if (!(error instanceof CATMAID.ReplacedRequestError)) {
         partnerSetIds.forEach(function(psId) {
           var type = partnerSetTypes[psId];
           self.addPartnerSet(new PartnerSet(psId, type.name, type.rel,
@@ -1821,7 +1822,7 @@
     var self = this;
 
     var table = $('#' + partnerSet.id + '_connectivity_table' + this.widgetID);
-    var data = table.DataTable().rows({order: 'current'}).data();
+    var data = table.DataTable().rows({order: 'current', search: 'applied'}).data();
 
     // Create table header manually
     var nns = CATMAID.NeuronNameService.getInstance();

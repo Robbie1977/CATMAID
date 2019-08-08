@@ -76,20 +76,26 @@ class FileImporter:
         self.options = options
         self.user = user
         self.create_unknown_users = options['create_unknown_users']
+        self.auto_name_unknown_users = options['auto_name_unknown_users']
+        self.next_auto_name_id = 1
         self.user_map = dict(User.objects.all().values_list('username', 'id'))
         self.user_id_map = dict((v,k) for k,v in self.user_map.items())
         self.preserve_ids = options['preserve_ids']
 
         self.format = 'json'
 
-    def map_or_create_users(self, obj, import_users, mapped_user_ids,
-            mapped_user_target_ids, created_users):
+        # Map user IDs to newly created users
+        self.created_unknown_users = dict()
+
+    def map_or_create_users(self, obj, import_users, replacement_users,
+            mapped_user_ids, mapped_user_target_ids, created_users):
         """Update user information of a CATMAID model object. The parameters
         <mapped_users>, <mapped_user_target_ids> and <created_users> are output
         parameters and are expected to have the types set, set and dict.
         """
         map_users = self.options['map_users']
         map_user_ids = self.options['map_user_ids']
+
         # Try to look at every user reference field in CATMAID.
         for ref in ('user', 'reviewer', 'editor'):
             id_ref = ref + "_id"
@@ -102,30 +108,35 @@ class FileImporter:
                 existing_user_same_id = self.user_id_map.get(obj_user_ref_id)
 
                 # If user data is imported, <imported_user> will be available
-                # and using matching to existing users is done by name. If
+                # and matching with existing users is done by user name. If
                 # there is no user data for this user in the imported data,
                 # mapping can optionally be done by ID or new users are
-                # created.
+                # created. If explicit mappings are asked for, they will
+                # override all others switches.
                 if import_user:
                     import_user = import_user.object
-                    obj_username = import_user.username
+                    replacement_name = replacement_users.get(import_user.username)
+                    obj_username = replacement_name or import_user.username
                     existing_user_id = self.user_map.get(obj_username)
 
                     # Map users if usernames match
                     if existing_user_id is not None:
                         # If a user with this username exists already, update
                         # the user reference the existing user if --map-users is
-                        # set. If no existing user is available, use imported user,
-                        # if available. Otherwise complain.
-                        if map_users:
+                        # set or a replacement is explicitly asked for. If no
+                        # existing user is available, use imported user, if
+                        # available. Otherwise complain.
+                        if map_users or replacement_name:
                             setattr(obj, id_ref, existing_user_id)
                             mapped_user_ids.add(obj_user_ref_id)
                             mapped_user_target_ids.add(existing_user_id)
                         elif import_user:
-                            raise CommandError("Referenced user \"{}\"".format(obj_username) +
+                            raise CommandError("Referenced user \"{}\" ".format(obj_username) +
                                     "exists both in database and in import data. If the " +
                                     "existing user should be used, please use the " +
-                                    "--map-users option")
+                                    "--map-users option to map all users or "
+                                    "--username-mapping=\"import-user=target-user\" " +
+                                    "for individual users")
                         else:
                             raise CommandError("Referenced user \"{}\"".format(obj_username) +
                                     "exists in database, but not in import data. If the " +
@@ -138,7 +149,7 @@ class FileImporter:
                         else:
                             import_user.is_active = False
                         created_users[obj_username] = import_user
-                        obj.user = import_user
+                        setattr(obj, ref, import_user)
                     elif self.create_unknown_users:
                         user = created_users.get(obj_username)
                         if not user:
@@ -147,7 +158,7 @@ class FileImporter:
                             user.is_active = False
                             user.save()
                             created_users[obj_username] = user
-                        obj.user = user
+                        setattr(obj, ref, user)
                     else:
                         raise CommandError("User \"{}\" is not ".format(obj_username) +
                                 "found in existing data or import data. Please use " +
@@ -156,26 +167,38 @@ class FileImporter:
                     mapped_user_ids.add(obj_user_ref_id)
                     mapped_user_target_ids.add(obj_user_ref_id)
                 elif self.create_unknown_users:
-                    user = created_users.get(obj_user_ref_id)
+                    user = self.created_unknown_users.get(obj_user_ref_id)
                     if not user:
-                        logger.info("Creating new inactive user for imported " +
-                                "user ID {}. No name information was ".format(obj_user_ref_id) +
-                                "available, please enter a new username.")
+                        if self.auto_name_unknown_users:
+                            logger.info("Creating new inactive user for imported " +
+                                    "user ID {}. No name information was ".format(obj_user_ref_id) +
+                                    "available and CATMAID will generate a name.")
+                        else:
+                            logger.info("Creating new inactive user for imported " +
+                                    "user ID {}. No name information was ".format(obj_user_ref_id) +
+                                    "available, please enter a new username.")
                         while True:
-                            new_username = input("New username: ").strip()
-                            if not new_username:
-                                logger.info("Please enter a valid username")
-                            elif self.user_map.get(new_username):
-                                logger.info("The username '{}' ".format(new_username) +
-                                        "exists already, choose a different one")
+                            if self.auto_name_unknown_users:
+                                new_username = "User {}".format(self.next_auto_name_id)
+                                self.next_auto_name_id += 1
+                                if not self.user_map.get(new_username):
+                                    break
                             else:
-                                break
+                                new_username = input("New username: ").strip()
+                                if not new_username:
+                                    logger.info("Please enter a valid username")
+                                elif self.user_map.get(new_username):
+                                    logger.info("The username '{}' ".format(new_username) +
+                                            "exists already, choose a different one")
+                                else:
+                                    break
 
                         user = User.objects.create(username=new_username)
                         user.is_active = False
                         user.save()
-                        created_users[obj_user_ref_id] = user
-                    obj.user = user
+                        created_users[new_username] = user
+                        self.created_unknown_users[obj_user_ref_id] = user
+                    setattr(obj, ref, user)
                 else:
                     raise ValueError("Could not find referenced user " +
                             "\"{}\" in imported. Try using --map-users or ".format(obj_user_ref_id))
@@ -335,7 +358,7 @@ class FileImporter:
             DROP TRIGGER on_delete_treenode_update_summary_and_edges ON treenode;
         """)
 
-        # Get all existing users so that we can map them basedon their username.
+        # Get all existing users so that we can map them based on their username.
         mapped_user_ids = set() # type: Set
         mapped_user_target_ids = set() # type: Set
 
@@ -363,6 +386,11 @@ class FileImporter:
         else:
             import_users = dict()
             logger.info("Found no referenceable users in import data")
+
+        username_mapping = {}
+        for m in self.options['username_mapping'] or []:
+            username_mapping[m[0]] = m[1]
+            logger.info('Mapping import user "{}" to target user "{}"'.format(m[0], m[1]))
 
         # Get CATMAID model classes, which are the ones we want to allow
         # optional modification of user, project and ID fields.
@@ -460,8 +488,8 @@ class FileImporter:
                 self.override_fields(obj)
 
                 # Map users based on username, optionally create unmapped users.
-                self.map_or_create_users(obj, import_users, mapped_user_ids,
-                            mapped_user_target_ids, created_users)
+                self.map_or_create_users(obj, import_users, username_mapping,
+                        mapped_user_ids, mapped_user_target_ids, created_users)
 
                 # Remove pre-defined ID and keep track of updated IDs in
                 # append-only mode (default).
@@ -563,15 +591,30 @@ class FileImporter:
             FOR EACH STATEMENT EXECUTE PROCEDURE on_delete_treenode_update_summary_and_edges();
         """)
 
-        if self.options.get('update_project_materializations'):
-            logger.info("Updating edge tables for project {}".format(self.target.id))
-            rebuild_edge_tables(project_ids=[self.target.id], log=lambda msg: logger.info(msg))
+        n_imported_treenodes = len(import_objects_by_type_and_id.get(Treenode, []))
+        n_imported_connectors = len(import_objects_by_type_and_id.get(Connector, []))
 
-            logger.info("Updated skeleton summary tables")
-            cursor.execute("""
-                DELETE FROM catmaid_skeleton_summary;
-                SELECT refresh_skeleton_summary_table();
-            """)
+        if self.options.get('update_project_materializations'):
+            if n_imported_connectors or n_imported_connectors:
+                logger.info("Updating edge tables for project {}".format(self.target.id))
+                rebuild_edge_tables(project_ids=[self.target.id], log=lambda msg: logger.info(msg))
+            else:
+                logger.info("No edge table update needed")
+
+            if n_imported_treenodes:
+                logger.info("Updated skeleton summary tables")
+                cursor.execute("""
+                    DELETE FROM catmaid_skeleton_summary;
+                    SELECT refresh_skeleton_summary_table();
+                """)
+
+                logger.info('Recreating skeleton summary table')
+                cursor.execute("""
+                    TRUNCATE catmaid_skeleton_summary;
+                    SELECT refresh_skeleton_summary_table();
+                """)
+            else:
+                logger.info("No skeleton summary update needed")
         else:
             logger.info("Finding imported skeleton IDs and connector IDs")
 
@@ -611,6 +654,17 @@ class FileImporter:
                 logger.info("No materialization to update: no skeleton IDs or " \
                         "connector IDs found in imported data")
 
+            # Skeleton summary
+            if skeleton_ids:
+                logger.info('Recreating skeleton summary table entries for imported skeletons')
+                cursor.execute("""
+                    SELECT refresh_skeleton_summary_table_selectively(%(skeleton_ids)s);
+                """, {
+                    'skeleton_ids': skeleton_ids,
+                })
+            else:
+                logger.info('No skeleton summary table updated needed')
+
 
 class InternalImporter:
     def __init__(self, source, target, user, options):
@@ -624,6 +678,16 @@ class InternalImporter:
         copy_annotations(self.source.id, self.target.id,
                 o['import_treenodes'], o['import_connectors'],
                 o['import_annotations'], o['import_tags'])
+
+
+def str2tuple(s):
+    """Convert a string of the form a=b into a tuple (a,b).
+    """
+    parts = s.split('=')
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError("Argument \"%s\" is not of form import-username=target-username" % (s))
+    return (parts[0].strip(), parts[1].strip())
+
 
 class Command(BaseCommand):
     help = "Import new or existing data into an existing CATMAID project"
@@ -656,8 +720,13 @@ class Command(BaseCommand):
         parser.add_argument('--map-user-ids', dest='map_user_ids', default=False,
                 const=True, type=lambda x: (str(x).lower() == 'true'), nargs='?',
                 help='Use existing user if user ID matches as a last option before new users would be created')
+        parser.add_argument('--username-mapping',  dest='username_mapping', default=[],
+                type=str2tuple, action='append',
+                help='Map an import username to a target instance username. Maps referenced users regardless of --map-users. The expected format is "import-user=existing-user", e.g. --username-mapping="AnonymousUser=AnonymousUser".')
         parser.add_argument('--create-unknown-users', dest='create_unknown_users', default=True,
             action='store_true', help='Create new inactive users for unmapped or unknown users referenced in inport data.')
+        parser.add_argument('--auto-name-unknown-users', dest='auto_name_unknown_users', default=False,
+            action='store_true', help='If enabled, newly created unknown users will be named "User <n>" where <n> is an increasing number. Requires --create-unknown-users')
         parser.add_argument('--preserve-ids', dest='preserve_ids', default=False,
                 action='store_true', help='Use IDs provided in import data. Warning: this can cause changes in existing data.')
         parser.add_argument('--no-analyze', dest='analyze_db', default=True,

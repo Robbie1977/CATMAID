@@ -3,31 +3,31 @@ asgi_ipc==1.4.2
 celery==4.3.0
 channels==1.1.8
 cssmin==0.2.0
-Cython==0.29.7
-Django==2.1.9
+Cython==0.29.10
+Django==2.1.11
 django-adminplus==0.5
 django-formtools==2.1
-django-guardian==1.5.1
+django-guardian==2.0.0
 django-pipeline==1.6.14
 django-rest-swagger==2.2.0
 django-taggit==1.1.0
-djangorestframework==3.9.3
+djangorestframework==3.9.4
 jsonfield==2.0.2
 kombu==4.5.0
 matplotlib==2.2.3
-mock==1.0.1
+mock==3.0.5
 msgpack==0.6.1; platform_python_implementation != 'PyPy'
 msgpack_python==0.5.6
 networkx==1.11
 numpy==1.15.4
 pillow==6.0.0
-progressbar2==3.39.3
-psycopg2-binary==2.8.2; platform_python_implementation != 'PyPy'
+progressbar2==3.42.0
+psycopg2-binary==2.8.3; platform_python_implementation != 'PyPy'
 psycopg2cffi==2.8.1;  platform_python_implementation == 'PyPy'
 python-dateutil==2.8.0
 pytz==2019.1
-PyYAML==5.1
-requests==2.21.0
+PyYAML==5.1.1
+requests==2.22.0
 scipy==1.2.0
 Sphinx==1.8.5
 sqlparse==0.3.0

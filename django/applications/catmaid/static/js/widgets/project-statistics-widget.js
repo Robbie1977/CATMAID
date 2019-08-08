@@ -21,6 +21,12 @@
     // Whether import activity should be included in the displayed statistics.
     this.includeImports = false;
 
+    // How many largest neurons should be displayed
+    this.displayTopN = 10;
+
+    // An optional text pattern that the largest neurons need to have
+    this.topNNameFilter = '';
+
     var update_stats_fields = function(data) {
       $("#skeletons_created").text(data.skeletons_created);
       $("#treenodes_created").text(data.treenodes_created);
@@ -558,8 +564,12 @@
     };
 
     this.refreshNodecount = function() {
-      return CATMAID.fetch(project.id + '/stats/nodecount', 'GET', {
-          with_imports: this.includeImports
+      return CATMAID.fetch({
+          url: project.id + '/stats/nodecount',
+          data: {
+            with_imports: this.includeImports,
+          },
+          parallel: true,
         })
         .then(function(response) {
           // The respose maps user IDs to number of nodes
@@ -570,8 +580,13 @@
 
     this.refreshLargestNeurons = function() {
       let self = this;
-      return CATMAID.fetch(project.id + '/stats/cable-length', 'GET', {
-          'n_skeletons': 10,
+      return CATMAID.fetch({
+          url: project.id + '/stats/cable-length',
+          data: {
+            'n_skeletons': this.displayTopN,
+            'name_pattern': this.topNNameFilter,
+          },
+          parallel: true,
         })
         .then(function(result) {
           let models = result.reduce(function(o, si) {
@@ -593,6 +608,31 @@
           while (target.lastChild) {
             target.removeChild(target.lastChild);
           }
+          // Add numeric field to change number of displayed elements
+          CATMAID.DOM.appendElement(target, {
+            type: 'numeric',
+            label: 'Top N',
+            title: 'The number of largest neurons to be displayed.',
+            value: self.displayTopN,
+            min: 1,
+            step: 1,
+            onchange: (e) => {
+              self.displayTopN = parseInt(e.target.value, 10);
+              self.refreshLargestNeurons();
+            },
+          });
+          CATMAID.DOM.appendElement(target, {
+            type: 'text',
+            label: 'Name filter',
+            title: 'Only retrieve skeletons that match this name pattern.',
+            placeholder: 'Use / for RegEx',
+            value: self.topNNameFilter,
+            onchange: (e) => {
+              self.topNNameFilter = e.target.value;
+              self.refreshLargestNeurons();
+            },
+          });
+
           // Add top ten
           let NNS = CATMAID.NeuronNameService.getInstance();
           let ul = target.appendChild(document.createElement('ul'));
@@ -615,10 +655,14 @@
     this.refresh_history = function() {
       // disable the refresh button until finished
       $(".stats-history-setting").prop('disabled', true);
-      CATMAID.fetch(project.id + '/stats/user-history', "GET", {
-          "pid": project.id,
-          "start_date": $("#stats-history-start-date").val(),
-          "end_date": $("#stats-history-end-date").val(),
+      CATMAID.fetch({
+          url: project.id + '/stats/user-history',
+          data: {
+            "pid": project.id,
+            "start_date": $("#stats-history-start-date").val(),
+            "end_date": $("#stats-history-end-date").val(),
+          },
+          parallel: true,
         })
         .then(function(jso) {
           $(".stats-history-setting").prop('disabled', false);
